@@ -1,0 +1,973 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<head>
+<meta http-equiv="content-type" content="text/html; charset=ISO-8859-1" />
+<title>TestWALReplay xref</title>
+<link type="text/css" rel="stylesheet" href="../../../../../../stylesheet.css" />
+</head>
+<body>
+<pre>
+
+<a name="1" href="#1">1</a>   <em class="jxr_javadoccomment">/**</em>
+<a name="2" href="#2">2</a>   <em class="jxr_javadoccomment"> * Copyright 2010 The Apache Software Foundation</em>
+<a name="3" href="#3">3</a>   <em class="jxr_javadoccomment"> *</em>
+<a name="4" href="#4">4</a>   <em class="jxr_javadoccomment"> * Licensed to the Apache Software Foundation (ASF) under one</em>
+<a name="5" href="#5">5</a>   <em class="jxr_javadoccomment"> * or more contributor license agreements.  See the NOTICE file</em>
+<a name="6" href="#6">6</a>   <em class="jxr_javadoccomment"> * distributed with this work for additional information</em>
+<a name="7" href="#7">7</a>   <em class="jxr_javadoccomment"> * regarding copyright ownership.  The ASF licenses this file</em>
+<a name="8" href="#8">8</a>   <em class="jxr_javadoccomment"> * to you under the Apache License, Version 2.0 (the</em>
+<a name="9" href="#9">9</a>   <em class="jxr_javadoccomment"> * "License"); you may not use this file except in compliance</em>
+<a name="10" href="#10">10</a>  <em class="jxr_javadoccomment"> * with the License.  You may obtain a copy of the License at</em>
+<a name="11" href="#11">11</a>  <em class="jxr_javadoccomment"> *</em>
+<a name="12" href="#12">12</a>  <em class="jxr_javadoccomment"> *     <a href="http://www.apache.org/licenses/LICENSE-2.0" target="alexandria_uri">http://www.apache.org/licenses/LICENSE-2.0</a></em>
+<a name="13" href="#13">13</a>  <em class="jxr_javadoccomment"> *</em>
+<a name="14" href="#14">14</a>  <em class="jxr_javadoccomment"> * Unless required by applicable law or agreed to in writing, software</em>
+<a name="15" href="#15">15</a>  <em class="jxr_javadoccomment"> * distributed under the License is distributed on an "AS IS" BASIS,</em>
+<a name="16" href="#16">16</a>  <em class="jxr_javadoccomment"> * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.</em>
+<a name="17" href="#17">17</a>  <em class="jxr_javadoccomment"> * See the License for the specific language governing permissions and</em>
+<a name="18" href="#18">18</a>  <em class="jxr_javadoccomment"> * limitations under the License.</em>
+<a name="19" href="#19">19</a>  <em class="jxr_javadoccomment"> */</em>
+<a name="20" href="#20">20</a>  <strong class="jxr_keyword">package</strong> org.apache.hadoop.hbase.regionserver.wal;
+<a name="21" href="#21">21</a>  
+<a name="22" href="#22">22</a>  <strong class="jxr_keyword">import</strong> <strong class="jxr_keyword">static</strong> org.junit.Assert.assertEquals;
+<a name="23" href="#23">23</a>  <strong class="jxr_keyword">import</strong> <strong class="jxr_keyword">static</strong> org.junit.Assert.assertTrue;
+<a name="24" href="#24">24</a>  <strong class="jxr_keyword">import</strong> <strong class="jxr_keyword">static</strong> org.junit.Assert.fail;
+<a name="25" href="#25">25</a>  
+<a name="26" href="#26">26</a>  <strong class="jxr_keyword">import</strong> java.io.IOException;
+<a name="27" href="#27">27</a>  <strong class="jxr_keyword">import</strong> java.security.PrivilegedExceptionAction;
+<a name="28" href="#28">28</a>  <strong class="jxr_keyword">import</strong> java.util.ArrayList;
+<a name="29" href="#29">29</a>  <strong class="jxr_keyword">import</strong> java.util.List;
+<a name="30" href="#30">30</a>  <strong class="jxr_keyword">import</strong> java.util.SortedSet;
+<a name="31" href="#31">31</a>  <strong class="jxr_keyword">import</strong> java.util.concurrent.atomic.AtomicBoolean;
+<a name="32" href="#32">32</a>  <strong class="jxr_keyword">import</strong> java.util.concurrent.atomic.AtomicInteger;
+<a name="33" href="#33">33</a>  <strong class="jxr_keyword">import</strong> java.util.concurrent.atomic.AtomicLong;
+<a name="34" href="#34">34</a>  
+<a name="35" href="#35">35</a>  <strong class="jxr_keyword">import</strong> org.apache.commons.logging.Log;
+<a name="36" href="#36">36</a>  <strong class="jxr_keyword">import</strong> org.apache.commons.logging.LogFactory;
+<a name="37" href="#37">37</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.conf.Configuration;
+<a name="38" href="#38">38</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.fs.FileStatus;
+<a name="39" href="#39">39</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.fs.FileSystem;
+<a name="40" href="#40">40</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.fs.Path;
+<a name="41" href="#41">41</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.HBaseConfiguration;
+<a name="42" href="#42">42</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.HBaseTestingUtility;
+<a name="43" href="#43">43</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.HColumnDescriptor;
+<a name="44" href="#44">44</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.HConstants;
+<a name="45" href="#45">45</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.HRegionInfo;
+<a name="46" href="#46">46</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.HTableDescriptor;
+<a name="47" href="#47">47</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.KeyValue;
+<a name="48" href="#48">48</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.MasterNotRunningException;
+<a name="49" href="#49">49</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.MediumTests;
+<a name="50" href="#50">50</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.MiniHBaseCluster;
+<a name="51" href="#51">51</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.ServerName;
+<a name="52" href="#52">52</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.ZooKeeperConnectionException;
+<a name="53" href="#53">53</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.client.Delete;
+<a name="54" href="#54">54</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.client.Get;
+<a name="55" href="#55">55</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.client.HTable;
+<a name="56" href="#56">56</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.client.Put;
+<a name="57" href="#57">57</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.client.Result;
+<a name="58" href="#58">58</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.client.ResultScanner;
+<a name="59" href="#59">59</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.client.Scan;
+<a name="60" href="#60">60</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.io.hfile.HFile;
+<a name="61" href="#61">61</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.master.HMaster;
+<a name="62" href="#62">62</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.monitoring.MonitoredTask;
+<a name="63" href="#63">63</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.regionserver.FlushRequester;
+<a name="64" href="#64">64</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.regionserver.HRegion;
+<a name="65" href="#65">65</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.regionserver.HRegionServer;
+<a name="66" href="#66">66</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.regionserver.RegionScanner;
+<a name="67" href="#67">67</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.regionserver.RegionServerServices;
+<a name="68" href="#68">68</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.regionserver.Store;
+<a name="69" href="#69">69</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.regionserver.TimeRangeTracker;
+<a name="70" href="#70">70</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.security.User;
+<a name="71" href="#71">71</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.util.Bytes;
+<a name="72" href="#72">72</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.util.EnvironmentEdge;
+<a name="73" href="#73">73</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+<a name="74" href="#74">74</a>  <strong class="jxr_keyword">import</strong> org.apache.hadoop.hbase.util.Pair;
+<a name="75" href="#75">75</a>  <strong class="jxr_keyword">import</strong> org.junit.After;
+<a name="76" href="#76">76</a>  <strong class="jxr_keyword">import</strong> org.junit.AfterClass;
+<a name="77" href="#77">77</a>  <strong class="jxr_keyword">import</strong> org.junit.Before;
+<a name="78" href="#78">78</a>  <strong class="jxr_keyword">import</strong> org.junit.BeforeClass;
+<a name="79" href="#79">79</a>  <strong class="jxr_keyword">import</strong> org.junit.Test;
+<a name="80" href="#80">80</a>  <strong class="jxr_keyword">import</strong> org.junit.experimental.categories.Category;
+<a name="81" href="#81">81</a>  <strong class="jxr_keyword">import</strong> org.mockito.Mockito;
+<a name="82" href="#82">82</a>  
+<a name="83" href="#83">83</a>  <em class="jxr_javadoccomment">/**</em>
+<a name="84" href="#84">84</a>  <em class="jxr_javadoccomment"> * Test replay of edits out of a WAL split.</em>
+<a name="85" href="#85">85</a>  <em class="jxr_javadoccomment"> */</em>
+<a name="86" href="#86">86</a>  @Category(MediumTests.<strong class="jxr_keyword">class</strong>)
+<a name="87" href="#87">87</a>  <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">class</strong> <a href="../../../../../../org/apache/hadoop/hbase/regionserver/wal/TestWALReplay.html">TestWALReplay</a> {
+<a name="88" href="#88">88</a>    <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">static</strong> <strong class="jxr_keyword">final</strong> Log LOG = LogFactory.getLog(TestWALReplay.<strong class="jxr_keyword">class</strong>);
+<a name="89" href="#89">89</a>    <strong class="jxr_keyword">static</strong> <strong class="jxr_keyword">final</strong> <a href="../../../../../../org/apache/hadoop/hbase/HBaseTestingUtility.html">HBaseTestingUtility</a> TEST_UTIL = <strong class="jxr_keyword">new</strong> <a href="../../../../../../org/apache/hadoop/hbase/HBaseTestingUtility.html">HBaseTestingUtility</a>();
+<a name="90" href="#90">90</a>    <strong class="jxr_keyword">private</strong> <strong class="jxr_keyword">final</strong> EnvironmentEdge ee = EnvironmentEdgeManager.getDelegate();
+<a name="91" href="#91">91</a>    <strong class="jxr_keyword">private</strong> Path hbaseRootDir = <strong class="jxr_keyword">null</strong>;
+<a name="92" href="#92">92</a>    <strong class="jxr_keyword">private</strong> Path oldLogDir;
+<a name="93" href="#93">93</a>    <strong class="jxr_keyword">private</strong> Path logDir;
+<a name="94" href="#94">94</a>    <strong class="jxr_keyword">private</strong> FileSystem fs;
+<a name="95" href="#95">95</a>    <strong class="jxr_keyword">private</strong> Configuration conf;
+<a name="96" href="#96">96</a>  
+<a name="97" href="#97">97</a>    @BeforeClass
+<a name="98" href="#98">98</a>    <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">static</strong> <strong class="jxr_keyword">void</strong> setUpBeforeClass() <strong class="jxr_keyword">throws</strong> Exception {
+<a name="99" href="#99">99</a>      Configuration conf = TEST_UTIL.getConfiguration();
+<a name="100" href="#100">100</a>     conf.setBoolean(<span class="jxr_string">"dfs.support.append"</span>, <strong class="jxr_keyword">true</strong>);
+<a name="101" href="#101">101</a>     <em class="jxr_comment">// The below config supported by 0.20-append and CDH3b2</em>
+<a name="102" href="#102">102</a>     conf.setInt(<span class="jxr_string">"dfs.client.block.recovery.retries"</span>, 2);
+<a name="103" href="#103">103</a>     TEST_UTIL.startMiniCluster(3);
+<a name="104" href="#104">104</a>     Path hbaseRootDir =
+<a name="105" href="#105">105</a>       TEST_UTIL.getDFSCluster().getFileSystem().makeQualified(<strong class="jxr_keyword">new</strong> Path(<span class="jxr_string">"/hbase"</span>));
+<a name="106" href="#106">106</a>     LOG.info(<span class="jxr_string">"hbase.rootdir="</span> + hbaseRootDir);
+<a name="107" href="#107">107</a>     conf.set(HConstants.HBASE_DIR, hbaseRootDir.toString());
+<a name="108" href="#108">108</a>   }
+<a name="109" href="#109">109</a> 
+<a name="110" href="#110">110</a>   @AfterClass
+<a name="111" href="#111">111</a>   <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">static</strong> <strong class="jxr_keyword">void</strong> tearDownAfterClass() <strong class="jxr_keyword">throws</strong> Exception {
+<a name="112" href="#112">112</a>     TEST_UTIL.shutdownMiniCluster();
+<a name="113" href="#113">113</a>   }
+<a name="114" href="#114">114</a> 
+<a name="115" href="#115">115</a>   @Before
+<a name="116" href="#116">116</a>   <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">void</strong> setUp() <strong class="jxr_keyword">throws</strong> Exception {
+<a name="117" href="#117">117</a>     <strong class="jxr_keyword">this</strong>.conf = HBaseConfiguration.create(TEST_UTIL.getConfiguration());
+<a name="118" href="#118">118</a>     <strong class="jxr_keyword">this</strong>.fs = TEST_UTIL.getDFSCluster().getFileSystem();
+<a name="119" href="#119">119</a>     <strong class="jxr_keyword">this</strong>.hbaseRootDir = <strong class="jxr_keyword">new</strong> Path(<strong class="jxr_keyword">this</strong>.conf.get(HConstants.HBASE_DIR));
+<a name="120" href="#120">120</a>     <strong class="jxr_keyword">this</strong>.oldLogDir = <strong class="jxr_keyword">new</strong> Path(<strong class="jxr_keyword">this</strong>.hbaseRootDir, HConstants.HREGION_OLDLOGDIR_NAME);
+<a name="121" href="#121">121</a>     <strong class="jxr_keyword">this</strong>.logDir = <strong class="jxr_keyword">new</strong> Path(<strong class="jxr_keyword">this</strong>.hbaseRootDir, HConstants.HREGION_LOGDIR_NAME);
+<a name="122" href="#122">122</a>     <strong class="jxr_keyword">if</strong> (TEST_UTIL.getDFSCluster().getFileSystem().exists(<strong class="jxr_keyword">this</strong>.hbaseRootDir)) {
+<a name="123" href="#123">123</a>       TEST_UTIL.getDFSCluster().getFileSystem().delete(<strong class="jxr_keyword">this</strong>.hbaseRootDir, <strong class="jxr_keyword">true</strong>);
+<a name="124" href="#124">124</a>     }
+<a name="125" href="#125">125</a>   }
+<a name="126" href="#126">126</a> 
+<a name="127" href="#127">127</a>   @After
+<a name="128" href="#128">128</a>   <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">void</strong> tearDown() <strong class="jxr_keyword">throws</strong> Exception {
+<a name="129" href="#129">129</a>     TEST_UTIL.getDFSCluster().getFileSystem().delete(<strong class="jxr_keyword">this</strong>.hbaseRootDir, <strong class="jxr_keyword">true</strong>);
+<a name="130" href="#130">130</a>   }
+<a name="131" href="#131">131</a> 
+<a name="132" href="#132">132</a>   <em class="jxr_comment">/*</em>
+<a name="133" href="#133">133</a> <em class="jxr_comment">   * @param p Directory to cleanup</em>
+<a name="134" href="#134">134</a> <em class="jxr_comment">   */</em>
+<a name="135" href="#135">135</a>   <strong class="jxr_keyword">private</strong> <strong class="jxr_keyword">void</strong> deleteDir(<strong class="jxr_keyword">final</strong> Path p) <strong class="jxr_keyword">throws</strong> IOException {
+<a name="136" href="#136">136</a>     <strong class="jxr_keyword">if</strong> (<strong class="jxr_keyword">this</strong>.fs.exists(p)) {
+<a name="137" href="#137">137</a>       <strong class="jxr_keyword">if</strong> (!<strong class="jxr_keyword">this</strong>.fs.delete(p, <strong class="jxr_keyword">true</strong>)) {
+<a name="138" href="#138">138</a>         <strong class="jxr_keyword">throw</strong> <strong class="jxr_keyword">new</strong> IOException(<span class="jxr_string">"Failed remove of "</span> + p);
+<a name="139" href="#139">139</a>       }
+<a name="140" href="#140">140</a>     }
+<a name="141" href="#141">141</a>   }
+<a name="142" href="#142">142</a> 
+<a name="143" href="#143">143</a>   <em class="jxr_javadoccomment">/**</em>
+<a name="144" href="#144">144</a> <em class="jxr_javadoccomment">   * </em>
+<a name="145" href="#145">145</a> <em class="jxr_javadoccomment">   * @throws Exception</em>
+<a name="146" href="#146">146</a> <em class="jxr_javadoccomment">   */</em>
+<a name="147" href="#147">147</a>   @Test
+<a name="148" href="#148">148</a>   <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">void</strong> testReplayEditsAfterRegionMovedWithMultiCF() <strong class="jxr_keyword">throws</strong> Exception {
+<a name="149" href="#149">149</a>     <strong class="jxr_keyword">final</strong> byte[] tableName = Bytes
+<a name="150" href="#150">150</a>         .toBytes(<span class="jxr_string">"testReplayEditsAfterRegionMovedWithMultiCF"</span>);
+<a name="151" href="#151">151</a>     byte[] family1 = Bytes.toBytes(<span class="jxr_string">"cf1"</span>);
+<a name="152" href="#152">152</a>     byte[] family2 = Bytes.toBytes(<span class="jxr_string">"cf2"</span>);
+<a name="153" href="#153">153</a>     byte[] qualifier = Bytes.toBytes(<span class="jxr_string">"q"</span>);
+<a name="154" href="#154">154</a>     byte[] value = Bytes.toBytes(<span class="jxr_string">"testV"</span>);
+<a name="155" href="#155">155</a>     byte[][] familys = { family1, family2 };
+<a name="156" href="#156">156</a>     TEST_UTIL.createTable(tableName, familys);
+<a name="157" href="#157">157</a>     HTable htable = <strong class="jxr_keyword">new</strong> HTable(TEST_UTIL.getConfiguration(), tableName);
+<a name="158" href="#158">158</a>     Put put = <strong class="jxr_keyword">new</strong> Put(Bytes.toBytes(<span class="jxr_string">"r1"</span>));
+<a name="159" href="#159">159</a>     put.add(family1, qualifier, value);
+<a name="160" href="#160">160</a>     htable.put(put);
+<a name="161" href="#161">161</a>     ResultScanner resultScanner = htable.getScanner(<strong class="jxr_keyword">new</strong> Scan());
+<a name="162" href="#162">162</a>     <strong class="jxr_keyword">int</strong> count = 0;
+<a name="163" href="#163">163</a>     <strong class="jxr_keyword">while</strong> (resultScanner.next() != <strong class="jxr_keyword">null</strong>) {
+<a name="164" href="#164">164</a>       count++;
+<a name="165" href="#165">165</a>     }
+<a name="166" href="#166">166</a>     resultScanner.close();
+<a name="167" href="#167">167</a>     assertEquals(1, count);
+<a name="168" href="#168">168</a> 
+<a name="169" href="#169">169</a>     <a href="../../../../../../org/apache/hadoop/hbase/MiniHBaseCluster.html">MiniHBaseCluster</a> hbaseCluster = TEST_UTIL.getMiniHBaseCluster();
+<a name="170" href="#170">170</a>     List&lt;HRegion&gt; regions = hbaseCluster.getRegions(tableName);
+<a name="171" href="#171">171</a>     assertEquals(1, regions.size());
+<a name="172" href="#172">172</a> 
+<a name="173" href="#173">173</a>     <em class="jxr_comment">// move region to another regionserver</em>
+<a name="174" href="#174">174</a>     HRegion destRegion = regions.get(0);
+<a name="175" href="#175">175</a>     <strong class="jxr_keyword">int</strong> originServerNum = hbaseCluster
+<a name="176" href="#176">176</a>         .getServerWith(destRegion.getRegionName());
+<a name="177" href="#177">177</a>     assertTrue(<span class="jxr_string">"Please start more than 1 regionserver"</span>, hbaseCluster
+<a name="178" href="#178">178</a>         .getRegionServerThreads().size() &gt; 1);
+<a name="179" href="#179">179</a>     <strong class="jxr_keyword">int</strong> destServerNum = 0;
+<a name="180" href="#180">180</a>     <strong class="jxr_keyword">while</strong> (destServerNum == originServerNum) {
+<a name="181" href="#181">181</a>       destServerNum++;
+<a name="182" href="#182">182</a>     }
+<a name="183" href="#183">183</a>     HRegionServer originServer = hbaseCluster.getRegionServer(originServerNum);
+<a name="184" href="#184">184</a>     HRegionServer destServer = hbaseCluster.getRegionServer(destServerNum);
+<a name="185" href="#185">185</a>     <em class="jxr_comment">// move region to destination regionserver</em>
+<a name="186" href="#186">186</a>     moveRegionAndWait(destRegion, destServer);
+<a name="187" href="#187">187</a> 
+<a name="188" href="#188">188</a>     <em class="jxr_comment">// delete the row</em>
+<a name="189" href="#189">189</a>     Delete del = <strong class="jxr_keyword">new</strong> Delete(Bytes.toBytes(<span class="jxr_string">"r1"</span>));
+<a name="190" href="#190">190</a>     htable.delete(del);
+<a name="191" href="#191">191</a>     resultScanner = htable.getScanner(<strong class="jxr_keyword">new</strong> Scan());
+<a name="192" href="#192">192</a>     count = 0;
+<a name="193" href="#193">193</a>     <strong class="jxr_keyword">while</strong> (resultScanner.next() != <strong class="jxr_keyword">null</strong>) {
+<a name="194" href="#194">194</a>       count++;
+<a name="195" href="#195">195</a>     }
+<a name="196" href="#196">196</a>     resultScanner.close();
+<a name="197" href="#197">197</a>     assertEquals(0, count);
+<a name="198" href="#198">198</a> 
+<a name="199" href="#199">199</a>     <em class="jxr_comment">// flush region and make major compaction</em>
+<a name="200" href="#200">200</a>     destServer.getOnlineRegion(destRegion.getRegionName()).flushcache();
+<a name="201" href="#201">201</a>     <em class="jxr_comment">// wait to complete major compaction</em>
+<a name="202" href="#202">202</a>     <strong class="jxr_keyword">for</strong> (Store store : destServer.getOnlineRegion(destRegion.getRegionName())
+<a name="203" href="#203">203</a>         .getStores().values()) {
+<a name="204" href="#204">204</a>       store.triggerMajorCompaction();
+<a name="205" href="#205">205</a>     }
+<a name="206" href="#206">206</a>     destServer.getOnlineRegion(destRegion.getRegionName()).compactStores();
+<a name="207" href="#207">207</a> 
+<a name="208" href="#208">208</a>     <em class="jxr_comment">// move region to origin regionserver</em>
+<a name="209" href="#209">209</a>     moveRegionAndWait(destRegion, originServer);
+<a name="210" href="#210">210</a>     <em class="jxr_comment">// abort the origin regionserver</em>
+<a name="211" href="#211">211</a>     originServer.abort(<span class="jxr_string">"testing"</span>);
+<a name="212" href="#212">212</a> 
+<a name="213" href="#213">213</a>     <em class="jxr_comment">// see what we get</em>
+<a name="214" href="#214">214</a>     Result result = htable.get(<strong class="jxr_keyword">new</strong> Get(Bytes.toBytes(<span class="jxr_string">"r1"</span>)));
+<a name="215" href="#215">215</a>     <strong class="jxr_keyword">if</strong> (result != <strong class="jxr_keyword">null</strong>) {
+<a name="216" href="#216">216</a>       assertTrue(<span class="jxr_string">"Row is deleted, but we get"</span> + result.toString(),
+<a name="217" href="#217">217</a>           (result == <strong class="jxr_keyword">null</strong>) || result.isEmpty());
+<a name="218" href="#218">218</a>     }
+<a name="219" href="#219">219</a>     resultScanner.close();
+<a name="220" href="#220">220</a>   }
+<a name="221" href="#221">221</a> 
+<a name="222" href="#222">222</a>   <strong class="jxr_keyword">private</strong> <strong class="jxr_keyword">void</strong> moveRegionAndWait(HRegion destRegion, HRegionServer destServer)
+<a name="223" href="#223">223</a>       <strong class="jxr_keyword">throws</strong> InterruptedException, MasterNotRunningException,
+<a name="224" href="#224">224</a>       ZooKeeperConnectionException, IOException {
+<a name="225" href="#225">225</a>     HMaster master = TEST_UTIL.getMiniHBaseCluster().getMaster();
+<a name="226" href="#226">226</a>     TEST_UTIL.getHBaseAdmin().move(
+<a name="227" href="#227">227</a>         destRegion.getRegionInfo().getEncodedNameAsBytes(),
+<a name="228" href="#228">228</a>         Bytes.toBytes(destServer.getServerName().getServerName()));
+<a name="229" href="#229">229</a>     <strong class="jxr_keyword">while</strong> (<strong class="jxr_keyword">true</strong>) {
+<a name="230" href="#230">230</a>       ServerName serverName = master.getAssignmentManager()
+<a name="231" href="#231">231</a>           .getRegionServerOfRegion(destRegion.getRegionInfo());
+<a name="232" href="#232">232</a>       <strong class="jxr_keyword">if</strong> (serverName != <strong class="jxr_keyword">null</strong> &amp;&amp; serverName.equals(destServer.getServerName())) <strong class="jxr_keyword">break</strong>;
+<a name="233" href="#233">233</a>       Thread.sleep(10);
+<a name="234" href="#234">234</a>     }
+<a name="235" href="#235">235</a>   }
+<a name="236" href="#236">236</a> 
+<a name="237" href="#237">237</a>   <em class="jxr_javadoccomment">/**</em>
+<a name="238" href="#238">238</a> <em class="jxr_javadoccomment">   * Tests for hbase-2727.</em>
+<a name="239" href="#239">239</a> <em class="jxr_javadoccomment">   * @throws Exception</em>
+<a name="240" href="#240">240</a> <em class="jxr_javadoccomment">   * @see https://issues.apache.org/jira/browse/HBASE-2727</em>
+<a name="241" href="#241">241</a> <em class="jxr_javadoccomment">   */</em>
+<a name="242" href="#242">242</a>   @Test
+<a name="243" href="#243">243</a>   <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">void</strong> test2727() <strong class="jxr_keyword">throws</strong> Exception {
+<a name="244" href="#244">244</a>     <em class="jxr_comment">// Test being able to have &gt; 1 set of edits in the recovered.edits directory.</em>
+<a name="245" href="#245">245</a>     <em class="jxr_comment">// Ensure edits are replayed properly.</em>
+<a name="246" href="#246">246</a>     <strong class="jxr_keyword">final</strong> String tableNameStr = <span class="jxr_string">"test2727"</span>;
+<a name="247" href="#247">247</a>     HRegionInfo hri = createBasic3FamilyHRegionInfo(tableNameStr);
+<a name="248" href="#248">248</a>     Path basedir = <strong class="jxr_keyword">new</strong> Path(hbaseRootDir, tableNameStr);
+<a name="249" href="#249">249</a>     deleteDir(basedir);
+<a name="250" href="#250">250</a>     fs.mkdirs(<strong class="jxr_keyword">new</strong> Path(basedir, hri.getEncodedName()));
+<a name="251" href="#251">251</a> 
+<a name="252" href="#252">252</a>     HTableDescriptor htd = createBasic3FamilyHTD(tableNameStr);
+<a name="253" href="#253">253</a>     HRegion region2 = HRegion.createHRegion(hri,
+<a name="254" href="#254">254</a>         hbaseRootDir, <strong class="jxr_keyword">this</strong>.conf, htd);
+<a name="255" href="#255">255</a>     region2.close();
+<a name="256" href="#256">256</a>     region2.getLog().closeAndDelete();
+<a name="257" href="#257">257</a>     <strong class="jxr_keyword">final</strong> byte [] tableName = Bytes.toBytes(tableNameStr);
+<a name="258" href="#258">258</a>     <strong class="jxr_keyword">final</strong> byte [] rowName = tableName;
+<a name="259" href="#259">259</a> 
+<a name="260" href="#260">260</a>     HLog wal1 = createWAL(<strong class="jxr_keyword">this</strong>.conf);
+<a name="261" href="#261">261</a>     <em class="jxr_comment">// Add 1k to each family.</em>
+<a name="262" href="#262">262</a>     <strong class="jxr_keyword">final</strong> <strong class="jxr_keyword">int</strong> countPerFamily = 1000;
+<a name="263" href="#263">263</a>     <strong class="jxr_keyword">for</strong> (HColumnDescriptor hcd: htd.getFamilies()) {
+<a name="264" href="#264">264</a>       addWALEdits(tableName, hri, rowName, hcd.getName(), countPerFamily, ee,
+<a name="265" href="#265">265</a>           wal1, htd);
+<a name="266" href="#266">266</a>     }
+<a name="267" href="#267">267</a>     wal1.close();
+<a name="268" href="#268">268</a>     runWALSplit(<strong class="jxr_keyword">this</strong>.conf);
+<a name="269" href="#269">269</a> 
+<a name="270" href="#270">270</a>     HLog wal2 = createWAL(<strong class="jxr_keyword">this</strong>.conf);
+<a name="271" href="#271">271</a>     <em class="jxr_comment">// Up the sequenceid so that these edits are after the ones added above.</em>
+<a name="272" href="#272">272</a>     wal2.setSequenceNumber(wal1.getSequenceNumber());
+<a name="273" href="#273">273</a>     <em class="jxr_comment">// Add 1k to each family.</em>
+<a name="274" href="#274">274</a>     <strong class="jxr_keyword">for</strong> (HColumnDescriptor hcd: htd.getFamilies()) {
+<a name="275" href="#275">275</a>       addWALEdits(tableName, hri, rowName, hcd.getName(), countPerFamily,
+<a name="276" href="#276">276</a>           ee, wal2, htd);
+<a name="277" href="#277">277</a>     }
+<a name="278" href="#278">278</a>     wal2.close();
+<a name="279" href="#279">279</a>     runWALSplit(<strong class="jxr_keyword">this</strong>.conf);
+<a name="280" href="#280">280</a> 
+<a name="281" href="#281">281</a>     HLog wal3 = createWAL(<strong class="jxr_keyword">this</strong>.conf);
+<a name="282" href="#282">282</a>     wal3.setSequenceNumber(wal2.getSequenceNumber());
+<a name="283" href="#283">283</a>     <strong class="jxr_keyword">try</strong> {
+<a name="284" href="#284">284</a>       <strong class="jxr_keyword">final</strong> HRegion region = <strong class="jxr_keyword">new</strong> HRegion(basedir, wal3, <strong class="jxr_keyword">this</strong>.fs, <strong class="jxr_keyword">this</strong>.conf, hri,
+<a name="285" href="#285">285</a>         htd, <strong class="jxr_keyword">null</strong>);
+<a name="286" href="#286">286</a>       <strong class="jxr_keyword">long</strong> seqid = region.initialize();
+<a name="287" href="#287">287</a>       assertTrue(seqid &gt; wal3.getSequenceNumber());
+<a name="288" href="#288">288</a> 
+<a name="289" href="#289">289</a>       <em class="jxr_comment">// TODO: Scan all.</em>
+<a name="290" href="#290">290</a>       region.close();
+<a name="291" href="#291">291</a>     } <strong class="jxr_keyword">finally</strong> {
+<a name="292" href="#292">292</a>       wal3.closeAndDelete();
+<a name="293" href="#293">293</a>     }
+<a name="294" href="#294">294</a>   }
+<a name="295" href="#295">295</a> 
+<a name="296" href="#296">296</a>   <em class="jxr_javadoccomment">/**</em>
+<a name="297" href="#297">297</a> <em class="jxr_javadoccomment">   * Test case of HRegion that is only made out of bulk loaded files.  Assert</em>
+<a name="298" href="#298">298</a> <em class="jxr_javadoccomment">   * that we don't 'crash'.</em>
+<a name="299" href="#299">299</a> <em class="jxr_javadoccomment">   * @throws IOException</em>
+<a name="300" href="#300">300</a> <em class="jxr_javadoccomment">   * @throws IllegalAccessException</em>
+<a name="301" href="#301">301</a> <em class="jxr_javadoccomment">   * @throws NoSuchFieldException</em>
+<a name="302" href="#302">302</a> <em class="jxr_javadoccomment">   * @throws IllegalArgumentException</em>
+<a name="303" href="#303">303</a> <em class="jxr_javadoccomment">   * @throws SecurityException</em>
+<a name="304" href="#304">304</a> <em class="jxr_javadoccomment">   */</em>
+<a name="305" href="#305">305</a>   @Test
+<a name="306" href="#306">306</a>   <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">void</strong> testRegionMadeOfBulkLoadedFilesOnly()
+<a name="307" href="#307">307</a>   <strong class="jxr_keyword">throws</strong> IOException, SecurityException, IllegalArgumentException,
+<a name="308" href="#308">308</a>       NoSuchFieldException, IllegalAccessException, InterruptedException {
+<a name="309" href="#309">309</a>     <strong class="jxr_keyword">final</strong> String tableNameStr = <span class="jxr_string">"testReplayEditsWrittenViaHRegion"</span>;
+<a name="310" href="#310">310</a>     <strong class="jxr_keyword">final</strong> HRegionInfo hri = createBasic3FamilyHRegionInfo(tableNameStr);
+<a name="311" href="#311">311</a>     <strong class="jxr_keyword">final</strong> Path basedir = <strong class="jxr_keyword">new</strong> Path(<strong class="jxr_keyword">this</strong>.hbaseRootDir, tableNameStr);
+<a name="312" href="#312">312</a>     deleteDir(basedir);
+<a name="313" href="#313">313</a>     <strong class="jxr_keyword">final</strong> HTableDescriptor htd = createBasic3FamilyHTD(tableNameStr);
+<a name="314" href="#314">314</a>     HRegion region2 = HRegion.createHRegion(hri,
+<a name="315" href="#315">315</a>         hbaseRootDir, <strong class="jxr_keyword">this</strong>.conf, htd);
+<a name="316" href="#316">316</a>     region2.close();
+<a name="317" href="#317">317</a>     region2.getLog().closeAndDelete();
+<a name="318" href="#318">318</a>     HLog wal = createWAL(<strong class="jxr_keyword">this</strong>.conf);
+<a name="319" href="#319">319</a>     HRegion region = HRegion.openHRegion(hri, htd, wal, <strong class="jxr_keyword">this</strong>.conf);
+<a name="320" href="#320">320</a>     Path f =  <strong class="jxr_keyword">new</strong> Path(basedir, <span class="jxr_string">"hfile"</span>);
+<a name="321" href="#321">321</a>     HFile.Writer writer =
+<a name="322" href="#322">322</a>       HFile.getWriterFactoryNoCache(conf).withPath(fs, f).create();
+<a name="323" href="#323">323</a>     byte [] family = htd.getFamilies().iterator().next().getName();
+<a name="324" href="#324">324</a>     byte [] row = Bytes.toBytes(tableNameStr);
+<a name="325" href="#325">325</a>     writer.append(<strong class="jxr_keyword">new</strong> KeyValue(row, family, family, row));
+<a name="326" href="#326">326</a>     writer.close();
+<a name="327" href="#327">327</a>     List &lt;Pair&lt;byte[],String&gt;&gt;  hfs= <strong class="jxr_keyword">new</strong> ArrayList&lt;Pair&lt;byte[],String&gt;&gt;(1);
+<a name="328" href="#328">328</a>     hfs.add(Pair.newPair(family, f.toString()));
+<a name="329" href="#329">329</a>     region.bulkLoadHFiles(hfs, <strong class="jxr_keyword">true</strong>);
+<a name="330" href="#330">330</a>     <em class="jxr_comment">// Add an edit so something in the WAL</em>
+<a name="331" href="#331">331</a>     region.put((<strong class="jxr_keyword">new</strong> Put(row)).add(family, family, family));
+<a name="332" href="#332">332</a>     wal.sync();
+<a name="333" href="#333">333</a> 
+<a name="334" href="#334">334</a>     <em class="jxr_comment">// Now 'crash' the region by stealing its wal</em>
+<a name="335" href="#335">335</a>     <strong class="jxr_keyword">final</strong> Configuration newConf = HBaseConfiguration.create(<strong class="jxr_keyword">this</strong>.conf);
+<a name="336" href="#336">336</a>     User user = HBaseTestingUtility.getDifferentUser(newConf,
+<a name="337" href="#337">337</a>         tableNameStr);
+<a name="338" href="#338">338</a>     user.runAs(<strong class="jxr_keyword">new</strong> PrivilegedExceptionAction() {
+<a name="339" href="#339">339</a>       <strong class="jxr_keyword">public</strong> Object run() <strong class="jxr_keyword">throws</strong> Exception {
+<a name="340" href="#340">340</a>         runWALSplit(newConf);
+<a name="341" href="#341">341</a>         HLog wal2 = createWAL(newConf);
+<a name="342" href="#342">342</a>         HRegion region2 = <strong class="jxr_keyword">new</strong> HRegion(basedir, wal2, FileSystem.get(newConf),
+<a name="343" href="#343">343</a>           newConf, hri, htd, <strong class="jxr_keyword">null</strong>);
+<a name="344" href="#344">344</a>         <strong class="jxr_keyword">long</strong> seqid2 = region2.initialize();
+<a name="345" href="#345">345</a>         assertTrue(seqid2 &gt; -1);
+<a name="346" href="#346">346</a> 
+<a name="347" href="#347">347</a>         <em class="jxr_comment">// I can't close wal1.  Its been appropriated when we split.</em>
+<a name="348" href="#348">348</a>         region2.close();
+<a name="349" href="#349">349</a>         wal2.closeAndDelete();
+<a name="350" href="#350">350</a>         <strong class="jxr_keyword">return</strong> <strong class="jxr_keyword">null</strong>;
+<a name="351" href="#351">351</a>       }
+<a name="352" href="#352">352</a>     });
+<a name="353" href="#353">353</a>   }
+<a name="354" href="#354">354</a> 
+<a name="355" href="#355">355</a>   <em class="jxr_javadoccomment">/**</em>
+<a name="356" href="#356">356</a> <em class="jxr_javadoccomment">   * Test writing edits into an HRegion, closing it, splitting logs, opening</em>
+<a name="357" href="#357">357</a> <em class="jxr_javadoccomment">   * Region again.  Verify seqids.</em>
+<a name="358" href="#358">358</a> <em class="jxr_javadoccomment">   * @throws IOException</em>
+<a name="359" href="#359">359</a> <em class="jxr_javadoccomment">   * @throws IllegalAccessException</em>
+<a name="360" href="#360">360</a> <em class="jxr_javadoccomment">   * @throws NoSuchFieldException</em>
+<a name="361" href="#361">361</a> <em class="jxr_javadoccomment">   * @throws IllegalArgumentException</em>
+<a name="362" href="#362">362</a> <em class="jxr_javadoccomment">   * @throws SecurityException</em>
+<a name="363" href="#363">363</a> <em class="jxr_javadoccomment">   */</em>
+<a name="364" href="#364">364</a>   @Test
+<a name="365" href="#365">365</a>   <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">void</strong> testReplayEditsWrittenViaHRegion()
+<a name="366" href="#366">366</a>   <strong class="jxr_keyword">throws</strong> IOException, SecurityException, IllegalArgumentException,
+<a name="367" href="#367">367</a>       NoSuchFieldException, IllegalAccessException, InterruptedException {
+<a name="368" href="#368">368</a>     <strong class="jxr_keyword">final</strong> String tableNameStr = <span class="jxr_string">"testReplayEditsWrittenViaHRegion"</span>;
+<a name="369" href="#369">369</a>     <strong class="jxr_keyword">final</strong> HRegionInfo hri = createBasic3FamilyHRegionInfo(tableNameStr);
+<a name="370" href="#370">370</a>     <strong class="jxr_keyword">final</strong> Path basedir = <strong class="jxr_keyword">new</strong> Path(<strong class="jxr_keyword">this</strong>.hbaseRootDir, tableNameStr);
+<a name="371" href="#371">371</a>     deleteDir(basedir);
+<a name="372" href="#372">372</a>     <strong class="jxr_keyword">final</strong> byte[] rowName = Bytes.toBytes(tableNameStr);
+<a name="373" href="#373">373</a>     <strong class="jxr_keyword">final</strong> <strong class="jxr_keyword">int</strong> countPerFamily = 10;
+<a name="374" href="#374">374</a>     <strong class="jxr_keyword">final</strong> HTableDescriptor htd = createBasic3FamilyHTD(tableNameStr);
+<a name="375" href="#375">375</a>     HRegion region3 = HRegion.createHRegion(hri,
+<a name="376" href="#376">376</a>             hbaseRootDir, <strong class="jxr_keyword">this</strong>.conf, htd);
+<a name="377" href="#377">377</a>     region3.close();
+<a name="378" href="#378">378</a>     region3.getLog().closeAndDelete();
+<a name="379" href="#379">379</a>     <em class="jxr_comment">// Write countPerFamily edits into the three families.  Do a flush on one</em>
+<a name="380" href="#380">380</a>     <em class="jxr_comment">// of the families during the load of edits so its seqid is not same as</em>
+<a name="381" href="#381">381</a>     <em class="jxr_comment">// others to test we do right thing when different seqids.</em>
+<a name="382" href="#382">382</a>     HLog wal = createWAL(<strong class="jxr_keyword">this</strong>.conf);
+<a name="383" href="#383">383</a>     HRegion region = <strong class="jxr_keyword">new</strong> HRegion(basedir, wal, <strong class="jxr_keyword">this</strong>.fs, <strong class="jxr_keyword">this</strong>.conf, hri, htd, <strong class="jxr_keyword">null</strong>);
+<a name="384" href="#384">384</a>     <strong class="jxr_keyword">long</strong> seqid = region.initialize();
+<a name="385" href="#385">385</a>     <em class="jxr_comment">// HRegionServer usually does this. It knows the largest seqid across all regions.</em>
+<a name="386" href="#386">386</a>     wal.setSequenceNumber(seqid);
+<a name="387" href="#387">387</a>     <strong class="jxr_keyword">boolean</strong> first = <strong class="jxr_keyword">true</strong>;
+<a name="388" href="#388">388</a>     <strong class="jxr_keyword">for</strong> (HColumnDescriptor hcd: htd.getFamilies()) {
+<a name="389" href="#389">389</a>       addRegionEdits(rowName, hcd.getName(), countPerFamily, <strong class="jxr_keyword">this</strong>.ee, region, <span class="jxr_string">"x"</span>);
+<a name="390" href="#390">390</a>       <strong class="jxr_keyword">if</strong> (first ) {
+<a name="391" href="#391">391</a>         <em class="jxr_comment">// If first, so we have at least one family w/ different seqid to rest.</em>
+<a name="392" href="#392">392</a>         region.flushcache();
+<a name="393" href="#393">393</a>         first = false;
+<a name="394" href="#394">394</a>       }
+<a name="395" href="#395">395</a>     }
+<a name="396" href="#396">396</a>     <em class="jxr_comment">// Now assert edits made it in.</em>
+<a name="397" href="#397">397</a>     <strong class="jxr_keyword">final</strong> Get g = <strong class="jxr_keyword">new</strong> Get(rowName);
+<a name="398" href="#398">398</a>     Result result = region.get(g, <strong class="jxr_keyword">null</strong>);
+<a name="399" href="#399">399</a>     assertEquals(countPerFamily * htd.getFamilies().size(),
+<a name="400" href="#400">400</a>       result.size());
+<a name="401" href="#401">401</a>     <em class="jxr_comment">// Now close the region (without flush), split the log, reopen the region and assert that</em>
+<a name="402" href="#402">402</a>     <em class="jxr_comment">// replay of log has the correct effect, that our seqids are calculated correctly so</em>
+<a name="403" href="#403">403</a>     <em class="jxr_comment">// all edits in logs are seen as 'stale'/old.</em>
+<a name="404" href="#404">404</a>     region.close(<strong class="jxr_keyword">true</strong>);
+<a name="405" href="#405">405</a>     wal.close();
+<a name="406" href="#406">406</a>     runWALSplit(<strong class="jxr_keyword">this</strong>.conf);
+<a name="407" href="#407">407</a>     HLog wal2 = createWAL(<strong class="jxr_keyword">this</strong>.conf);
+<a name="408" href="#408">408</a>     HRegion region2 = <strong class="jxr_keyword">new</strong> HRegion(basedir, wal2, <strong class="jxr_keyword">this</strong>.fs, <strong class="jxr_keyword">this</strong>.conf, hri, htd, <strong class="jxr_keyword">null</strong>);
+<a name="409" href="#409">409</a>     <strong class="jxr_keyword">long</strong> seqid2 = region2.initialize();
+<a name="410" href="#410">410</a>     <em class="jxr_comment">// HRegionServer usually does this. It knows the largest seqid across all regions.</em>
+<a name="411" href="#411">411</a>     wal2.setSequenceNumber(seqid2);
+<a name="412" href="#412">412</a>     assertTrue(seqid + result.size() &lt; seqid2);
+<a name="413" href="#413">413</a>     <strong class="jxr_keyword">final</strong> Result result1b = region2.get(g, <strong class="jxr_keyword">null</strong>);
+<a name="414" href="#414">414</a>     assertEquals(result.size(), result1b.size());
+<a name="415" href="#415">415</a> 
+<a name="416" href="#416">416</a>     <em class="jxr_comment">// Next test.  Add more edits, then 'crash' this region by stealing its wal</em>
+<a name="417" href="#417">417</a>     <em class="jxr_comment">// out from under it and assert that replay of the log adds the edits back</em>
+<a name="418" href="#418">418</a>     <em class="jxr_comment">// correctly when region is opened again.</em>
+<a name="419" href="#419">419</a>     <strong class="jxr_keyword">for</strong> (HColumnDescriptor hcd: htd.getFamilies()) {
+<a name="420" href="#420">420</a>       addRegionEdits(rowName, hcd.getName(), countPerFamily, <strong class="jxr_keyword">this</strong>.ee, region2, <span class="jxr_string">"y"</span>);
+<a name="421" href="#421">421</a>     }
+<a name="422" href="#422">422</a>     <em class="jxr_comment">// Get count of edits.</em>
+<a name="423" href="#423">423</a>     <strong class="jxr_keyword">final</strong> Result result2 = region2.get(g, <strong class="jxr_keyword">null</strong>);
+<a name="424" href="#424">424</a>     assertEquals(2 * result.size(), result2.size());
+<a name="425" href="#425">425</a>     wal2.sync();
+<a name="426" href="#426">426</a>     <em class="jxr_comment">// Set down maximum recovery so we dfsclient doesn't linger retrying something</em>
+<a name="427" href="#427">427</a>     <em class="jxr_comment">// long gone.</em>
+<a name="428" href="#428">428</a>     HBaseTestingUtility.setMaxRecoveryErrorCount(wal2.getOutputStream(), 1);
+<a name="429" href="#429">429</a>     <strong class="jxr_keyword">final</strong> Configuration newConf = HBaseConfiguration.create(<strong class="jxr_keyword">this</strong>.conf);
+<a name="430" href="#430">430</a>     User user = HBaseTestingUtility.getDifferentUser(newConf,
+<a name="431" href="#431">431</a>       tableNameStr);
+<a name="432" href="#432">432</a>     user.runAs(<strong class="jxr_keyword">new</strong> PrivilegedExceptionAction() {
+<a name="433" href="#433">433</a>       <strong class="jxr_keyword">public</strong> Object run() <strong class="jxr_keyword">throws</strong> Exception {
+<a name="434" href="#434">434</a>         runWALSplit(newConf);
+<a name="435" href="#435">435</a>         FileSystem newFS = FileSystem.get(newConf);
+<a name="436" href="#436">436</a>         <em class="jxr_comment">// Make a new wal for new region open.</em>
+<a name="437" href="#437">437</a>         HLog wal3 = createWAL(newConf);
+<a name="438" href="#438">438</a>         <strong class="jxr_keyword">final</strong> AtomicInteger countOfRestoredEdits = <strong class="jxr_keyword">new</strong> AtomicInteger(0);
+<a name="439" href="#439">439</a>         HRegion region3 = <strong class="jxr_keyword">new</strong> HRegion(basedir, wal3, newFS, newConf, hri, htd, <strong class="jxr_keyword">null</strong>) {
+<a name="440" href="#440">440</a>           @Override
+<a name="441" href="#441">441</a>           <strong class="jxr_keyword">protected</strong> <strong class="jxr_keyword">boolean</strong> restoreEdit(Store s, KeyValue kv) {
+<a name="442" href="#442">442</a>             <strong class="jxr_keyword">boolean</strong> b = <strong class="jxr_keyword">super</strong>.restoreEdit(s, kv);
+<a name="443" href="#443">443</a>             countOfRestoredEdits.incrementAndGet();
+<a name="444" href="#444">444</a>             <strong class="jxr_keyword">return</strong> b;
+<a name="445" href="#445">445</a>           }
+<a name="446" href="#446">446</a>         };
+<a name="447" href="#447">447</a>         <strong class="jxr_keyword">long</strong> seqid3 = region3.initialize();
+<a name="448" href="#448">448</a>         <em class="jxr_comment">// HRegionServer usually does this. It knows the largest seqid across all regions.</em>
+<a name="449" href="#449">449</a>         wal3.setSequenceNumber(seqid3);
+<a name="450" href="#450">450</a>         Result result3 = region3.get(g, <strong class="jxr_keyword">null</strong>);
+<a name="451" href="#451">451</a>         <em class="jxr_comment">// Assert that count of cells is same as before crash.</em>
+<a name="452" href="#452">452</a>         assertEquals(result2.size(), result3.size());
+<a name="453" href="#453">453</a>         assertEquals(htd.getFamilies().size() * countPerFamily,
+<a name="454" href="#454">454</a>           countOfRestoredEdits.get());
+<a name="455" href="#455">455</a> 
+<a name="456" href="#456">456</a>         <em class="jxr_comment">// I can't close wal1.  Its been appropriated when we split.</em>
+<a name="457" href="#457">457</a>         region3.close();
+<a name="458" href="#458">458</a>         wal3.closeAndDelete();
+<a name="459" href="#459">459</a>         <strong class="jxr_keyword">return</strong> <strong class="jxr_keyword">null</strong>;
+<a name="460" href="#460">460</a>       }
+<a name="461" href="#461">461</a>     });
+<a name="462" href="#462">462</a>   }
+<a name="463" href="#463">463</a> 
+<a name="464" href="#464">464</a>   <em class="jxr_javadoccomment">/**</em>
+<a name="465" href="#465">465</a> <em class="jxr_javadoccomment">   * Test that we recover correctly when there is a failure in between the</em>
+<a name="466" href="#466">466</a> <em class="jxr_javadoccomment">   * flushes. i.e. Some stores got flushed but others did not.</em>
+<a name="467" href="#467">467</a> <em class="jxr_javadoccomment">   *</em>
+<a name="468" href="#468">468</a> <em class="jxr_javadoccomment">   * Unfortunately, there is no easy hook to flush at a store level. The way</em>
+<a name="469" href="#469">469</a> <em class="jxr_javadoccomment">   * we get around this is by flushing at the region level, and then deleting</em>
+<a name="470" href="#470">470</a> <em class="jxr_javadoccomment">   * the recently flushed store file for one of the Stores. This would put us</em>
+<a name="471" href="#471">471</a> <em class="jxr_javadoccomment">   * back in the situation where all but that store got flushed and the region</em>
+<a name="472" href="#472">472</a> <em class="jxr_javadoccomment">   * died.</em>
+<a name="473" href="#473">473</a> <em class="jxr_javadoccomment">   *</em>
+<a name="474" href="#474">474</a> <em class="jxr_javadoccomment">   * We restart Region again, and verify that the edits were replayed.</em>
+<a name="475" href="#475">475</a> <em class="jxr_javadoccomment">   *</em>
+<a name="476" href="#476">476</a> <em class="jxr_javadoccomment">   * @throws IOException</em>
+<a name="477" href="#477">477</a> <em class="jxr_javadoccomment">   * @throws IllegalAccessException</em>
+<a name="478" href="#478">478</a> <em class="jxr_javadoccomment">   * @throws NoSuchFieldException</em>
+<a name="479" href="#479">479</a> <em class="jxr_javadoccomment">   * @throws IllegalArgumentException</em>
+<a name="480" href="#480">480</a> <em class="jxr_javadoccomment">   * @throws SecurityException</em>
+<a name="481" href="#481">481</a> <em class="jxr_javadoccomment">   */</em>
+<a name="482" href="#482">482</a>   @Test
+<a name="483" href="#483">483</a>   <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">void</strong> testReplayEditsAfterPartialFlush()
+<a name="484" href="#484">484</a>   <strong class="jxr_keyword">throws</strong> IOException, SecurityException, IllegalArgumentException,
+<a name="485" href="#485">485</a>       NoSuchFieldException, IllegalAccessException, InterruptedException {
+<a name="486" href="#486">486</a>     <strong class="jxr_keyword">final</strong> String tableNameStr = <span class="jxr_string">"testReplayEditsWrittenViaHRegion"</span>;
+<a name="487" href="#487">487</a>     <strong class="jxr_keyword">final</strong> HRegionInfo hri = createBasic3FamilyHRegionInfo(tableNameStr);
+<a name="488" href="#488">488</a>     <strong class="jxr_keyword">final</strong> Path basedir = <strong class="jxr_keyword">new</strong> Path(<strong class="jxr_keyword">this</strong>.hbaseRootDir, tableNameStr);
+<a name="489" href="#489">489</a>     deleteDir(basedir);
+<a name="490" href="#490">490</a>     <strong class="jxr_keyword">final</strong> byte[] rowName = Bytes.toBytes(tableNameStr);
+<a name="491" href="#491">491</a>     <strong class="jxr_keyword">final</strong> <strong class="jxr_keyword">int</strong> countPerFamily = 10;
+<a name="492" href="#492">492</a>     <strong class="jxr_keyword">final</strong> HTableDescriptor htd = createBasic3FamilyHTD(tableNameStr);
+<a name="493" href="#493">493</a>     HRegion region3 = HRegion.createHRegion(hri,
+<a name="494" href="#494">494</a>             hbaseRootDir, <strong class="jxr_keyword">this</strong>.conf, htd);
+<a name="495" href="#495">495</a>     region3.close();
+<a name="496" href="#496">496</a>     region3.getLog().closeAndDelete();
+<a name="497" href="#497">497</a>     <em class="jxr_comment">// Write countPerFamily edits into the three families.  Do a flush on one</em>
+<a name="498" href="#498">498</a>     <em class="jxr_comment">// of the families during the load of edits so its seqid is not same as</em>
+<a name="499" href="#499">499</a>     <em class="jxr_comment">// others to test we do right thing when different seqids.</em>
+<a name="500" href="#500">500</a>     HLog wal = createWAL(<strong class="jxr_keyword">this</strong>.conf);
+<a name="501" href="#501">501</a>     HRegion region = <strong class="jxr_keyword">new</strong> HRegion(basedir, wal, <strong class="jxr_keyword">this</strong>.fs, <strong class="jxr_keyword">this</strong>.conf, hri, htd, <strong class="jxr_keyword">null</strong>);
+<a name="502" href="#502">502</a>     <strong class="jxr_keyword">long</strong> seqid = region.initialize();
+<a name="503" href="#503">503</a>     <em class="jxr_comment">// HRegionServer usually does this. It knows the largest seqid across all regions.</em>
+<a name="504" href="#504">504</a>     wal.setSequenceNumber(seqid);
+<a name="505" href="#505">505</a>     <strong class="jxr_keyword">for</strong> (HColumnDescriptor hcd: htd.getFamilies()) {
+<a name="506" href="#506">506</a>       addRegionEdits(rowName, hcd.getName(), countPerFamily, <strong class="jxr_keyword">this</strong>.ee, region, <span class="jxr_string">"x"</span>);
+<a name="507" href="#507">507</a>     }
+<a name="508" href="#508">508</a> 
+<a name="509" href="#509">509</a>     <em class="jxr_comment">// Now assert edits made it in.</em>
+<a name="510" href="#510">510</a>     <strong class="jxr_keyword">final</strong> Get g = <strong class="jxr_keyword">new</strong> Get(rowName);
+<a name="511" href="#511">511</a>     Result result = region.get(g, <strong class="jxr_keyword">null</strong>);
+<a name="512" href="#512">512</a>     assertEquals(countPerFamily * htd.getFamilies().size(),
+<a name="513" href="#513">513</a>       result.size());
+<a name="514" href="#514">514</a> 
+<a name="515" href="#515">515</a>     <em class="jxr_comment">// Let us flush the region</em>
+<a name="516" href="#516">516</a>     region.flushcache();
+<a name="517" href="#517">517</a>     region.close(<strong class="jxr_keyword">true</strong>);
+<a name="518" href="#518">518</a>     wal.close();
+<a name="519" href="#519">519</a> 
+<a name="520" href="#520">520</a>     <em class="jxr_comment">// delete the store files in the second column family to simulate a failure</em>
+<a name="521" href="#521">521</a>     <em class="jxr_comment">// in between the flushcache();</em>
+<a name="522" href="#522">522</a>     <em class="jxr_comment">// we have 3 families. killing the middle one ensures that taking the maximum</em>
+<a name="523" href="#523">523</a>     <em class="jxr_comment">// will make us fail.</em>
+<a name="524" href="#524">524</a>     <strong class="jxr_keyword">int</strong> cf_count = 0;
+<a name="525" href="#525">525</a>     <strong class="jxr_keyword">for</strong> (HColumnDescriptor hcd: htd.getFamilies()) {
+<a name="526" href="#526">526</a>       cf_count++;
+<a name="527" href="#527">527</a>       <strong class="jxr_keyword">if</strong> (cf_count == 2) {
+<a name="528" href="#528">528</a>         <strong class="jxr_keyword">this</strong>.fs.delete(<strong class="jxr_keyword">new</strong> Path(region.getRegionDir(), Bytes.toString(hcd.getName()))
+<a name="529" href="#529">529</a>             , <strong class="jxr_keyword">true</strong>);
+<a name="530" href="#530">530</a>       }
+<a name="531" href="#531">531</a>     }
+<a name="532" href="#532">532</a> 
+<a name="533" href="#533">533</a> 
+<a name="534" href="#534">534</a>     <em class="jxr_comment">// Let us try to split and recover</em>
+<a name="535" href="#535">535</a>     runWALSplit(<strong class="jxr_keyword">this</strong>.conf);
+<a name="536" href="#536">536</a>     HLog wal2 = createWAL(<strong class="jxr_keyword">this</strong>.conf);
+<a name="537" href="#537">537</a>     HRegion region2 = <strong class="jxr_keyword">new</strong> HRegion(basedir, wal2, <strong class="jxr_keyword">this</strong>.fs, <strong class="jxr_keyword">this</strong>.conf, hri, htd, <strong class="jxr_keyword">null</strong>);
+<a name="538" href="#538">538</a>     <strong class="jxr_keyword">long</strong> seqid2 = region2.initialize();
+<a name="539" href="#539">539</a>     <em class="jxr_comment">// HRegionServer usually does this. It knows the largest seqid across all regions.</em>
+<a name="540" href="#540">540</a>     wal2.setSequenceNumber(seqid2);
+<a name="541" href="#541">541</a>     assertTrue(seqid + result.size() &lt; seqid2);
+<a name="542" href="#542">542</a> 
+<a name="543" href="#543">543</a>     <strong class="jxr_keyword">final</strong> Result result1b = region2.get(g, <strong class="jxr_keyword">null</strong>);
+<a name="544" href="#544">544</a>     assertEquals(result.size(), result1b.size());
+<a name="545" href="#545">545</a>   }
+<a name="546" href="#546">546</a> 
+<a name="547" href="#547">547</a>   <em class="jxr_javadoccomment">/**</em>
+<a name="548" href="#548">548</a> <em class="jxr_javadoccomment">   * Test that we could recover the data correctly after aborting flush. In the</em>
+<a name="549" href="#549">549</a> <em class="jxr_javadoccomment">   * test, first we abort flush after writing some data, then writing more data</em>
+<a name="550" href="#550">550</a> <em class="jxr_javadoccomment">   * and flush again, at last verify the data.</em>
+<a name="551" href="#551">551</a> <em class="jxr_javadoccomment">   * @throws IOException</em>
+<a name="552" href="#552">552</a> <em class="jxr_javadoccomment">   */</em>
+<a name="553" href="#553">553</a>   @Test
+<a name="554" href="#554">554</a>   <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">void</strong> testReplayEditsAfterAbortingFlush() <strong class="jxr_keyword">throws</strong> IOException {
+<a name="555" href="#555">555</a>     <strong class="jxr_keyword">final</strong> String tableNameStr = <span class="jxr_string">"testReplayEditsAfterAbortingFlush"</span>;
+<a name="556" href="#556">556</a>     <strong class="jxr_keyword">final</strong> HRegionInfo hri = createBasic3FamilyHRegionInfo(tableNameStr);
+<a name="557" href="#557">557</a>     <strong class="jxr_keyword">final</strong> Path basedir = <strong class="jxr_keyword">new</strong> Path(<strong class="jxr_keyword">this</strong>.hbaseRootDir, tableNameStr);
+<a name="558" href="#558">558</a>     deleteDir(basedir);
+<a name="559" href="#559">559</a>     <strong class="jxr_keyword">final</strong> HTableDescriptor htd = createBasic3FamilyHTD(tableNameStr);
+<a name="560" href="#560">560</a>     HRegion region3 = HRegion.createHRegion(hri, hbaseRootDir, <strong class="jxr_keyword">this</strong>.conf, htd);
+<a name="561" href="#561">561</a>     region3.close();
+<a name="562" href="#562">562</a>     region3.getLog().closeAndDelete();
+<a name="563" href="#563">563</a>     <em class="jxr_comment">// Write countPerFamily edits into the three families. Do a flush on one</em>
+<a name="564" href="#564">564</a>     <em class="jxr_comment">// of the families during the load of edits so its seqid is not same as</em>
+<a name="565" href="#565">565</a>     <em class="jxr_comment">// others to test we do right thing when different seqids.</em>
+<a name="566" href="#566">566</a>     HLog wal = createWAL(<strong class="jxr_keyword">this</strong>.conf);
+<a name="567" href="#567">567</a>     <strong class="jxr_keyword">final</strong> AtomicBoolean throwExceptionWhenFlushing = <strong class="jxr_keyword">new</strong> AtomicBoolean(false);
+<a name="568" href="#568">568</a>     RegionServerServices rsServices = Mockito.mock(RegionServerServices.<strong class="jxr_keyword">class</strong>);
+<a name="569" href="#569">569</a>     Mockito.doReturn(false).when(rsServices).isAborted();
+<a name="570" href="#570">570</a>     HRegion region = <strong class="jxr_keyword">new</strong> HRegion(basedir, wal, <strong class="jxr_keyword">this</strong>.fs, <strong class="jxr_keyword">this</strong>.conf, hri, htd,
+<a name="571" href="#571">571</a>         rsServices) {
+<a name="572" href="#572">572</a>       @Override
+<a name="573" href="#573">573</a>       <strong class="jxr_keyword">protected</strong> Store instantiateHStore(Path tableDir, HColumnDescriptor c)
+<a name="574" href="#574">574</a>           <strong class="jxr_keyword">throws</strong> IOException {
+<a name="575" href="#575">575</a>         <strong class="jxr_keyword">return</strong> <strong class="jxr_keyword">new</strong> Store(tableDir, <strong class="jxr_keyword">this</strong>, c, fs, conf) {
+<a name="576" href="#576">576</a>           @Override
+<a name="577" href="#577">577</a>           <strong class="jxr_keyword">protected</strong> Path flushCache(<strong class="jxr_keyword">final</strong> <strong class="jxr_keyword">long</strong> logCacheFlushId,
+<a name="578" href="#578">578</a>               SortedSet&lt;KeyValue&gt; snapshot,
+<a name="579" href="#579">579</a>               TimeRangeTracker snapshotTimeRangeTracker,
+<a name="580" href="#580">580</a>               AtomicLong flushedSize, MonitoredTask status) <strong class="jxr_keyword">throws</strong> IOException {
+<a name="581" href="#581">581</a>             <strong class="jxr_keyword">if</strong> (throwExceptionWhenFlushing.get()) {
+<a name="582" href="#582">582</a>               <strong class="jxr_keyword">throw</strong> <strong class="jxr_keyword">new</strong> IOException(<span class="jxr_string">"Simulated exception by tests"</span>);
+<a name="583" href="#583">583</a>             }
+<a name="584" href="#584">584</a>             <strong class="jxr_keyword">return</strong> <strong class="jxr_keyword">super</strong>.flushCache(logCacheFlushId, snapshot,
+<a name="585" href="#585">585</a>                 snapshotTimeRangeTracker, flushedSize, status);
+<a name="586" href="#586">586</a>           }
+<a name="587" href="#587">587</a>         };
+<a name="588" href="#588">588</a>       }
+<a name="589" href="#589">589</a>     };
+<a name="590" href="#590">590</a>     <strong class="jxr_keyword">long</strong> seqid = region.initialize();
+<a name="591" href="#591">591</a>     <em class="jxr_comment">// HRegionServer usually does this. It knows the largest seqid across all</em>
+<a name="592" href="#592">592</a>     <em class="jxr_comment">// regions.</em>
+<a name="593" href="#593">593</a>     wal.setSequenceNumber(seqid);
+<a name="594" href="#594">594</a> 
+<a name="595" href="#595">595</a>     <strong class="jxr_keyword">int</strong> writtenRowCount = 10;
+<a name="596" href="#596">596</a>     List&lt;HColumnDescriptor&gt; families = <strong class="jxr_keyword">new</strong> ArrayList&lt;HColumnDescriptor&gt;(
+<a name="597" href="#597">597</a>         htd.getFamilies());
+<a name="598" href="#598">598</a>     <strong class="jxr_keyword">for</strong> (<strong class="jxr_keyword">int</strong> i = 0; i &lt; writtenRowCount; i++) {
+<a name="599" href="#599">599</a>       Put put = <strong class="jxr_keyword">new</strong> Put(Bytes.toBytes(tableNameStr + Integer.toString(i)));
+<a name="600" href="#600">600</a>       put.add(families.get(i % families.size()).getName(), Bytes.toBytes(<span class="jxr_string">"q"</span>),
+<a name="601" href="#601">601</a>           Bytes.toBytes(<span class="jxr_string">"val"</span>));
+<a name="602" href="#602">602</a>       region.put(put);
+<a name="603" href="#603">603</a>     }
+<a name="604" href="#604">604</a> 
+<a name="605" href="#605">605</a>     <em class="jxr_comment">// Now assert edits made it in.</em>
+<a name="606" href="#606">606</a>     RegionScanner scanner = region.getScanner(<strong class="jxr_keyword">new</strong> Scan());
+<a name="607" href="#607">607</a>     assertEquals(writtenRowCount, getScannedCount(scanner));
+<a name="608" href="#608">608</a> 
+<a name="609" href="#609">609</a>     <em class="jxr_comment">// Let us flush the region</em>
+<a name="610" href="#610">610</a>     throwExceptionWhenFlushing.set(<strong class="jxr_keyword">true</strong>);
+<a name="611" href="#611">611</a>     <strong class="jxr_keyword">try</strong> {
+<a name="612" href="#612">612</a>       region.flushcache();
+<a name="613" href="#613">613</a>       fail(<span class="jxr_string">"Injected exception hasn't been thrown"</span>);
+<a name="614" href="#614">614</a>     } <strong class="jxr_keyword">catch</strong> (Throwable t) {
+<a name="615" href="#615">615</a>       LOG.info(<span class="jxr_string">"Expected simulated exception when flushing region,"</span>
+<a name="616" href="#616">616</a>           + t.getMessage());
+<a name="617" href="#617">617</a>       <em class="jxr_comment">// simulated to abort server</em>
+<a name="618" href="#618">618</a>       Mockito.doReturn(<strong class="jxr_keyword">true</strong>).when(rsServices).isAborted();
+<a name="619" href="#619">619</a>     }
+<a name="620" href="#620">620</a>     <em class="jxr_comment">// writing more data</em>
+<a name="621" href="#621">621</a>     <strong class="jxr_keyword">int</strong> moreRow = 10;
+<a name="622" href="#622">622</a>     <strong class="jxr_keyword">for</strong> (<strong class="jxr_keyword">int</strong> i = writtenRowCount; i &lt; writtenRowCount + moreRow; i++) {
+<a name="623" href="#623">623</a>       Put put = <strong class="jxr_keyword">new</strong> Put(Bytes.toBytes(tableNameStr + Integer.toString(i)));
+<a name="624" href="#624">624</a>       put.add(families.get(i % families.size()).getName(), Bytes.toBytes(<span class="jxr_string">"q"</span>),
+<a name="625" href="#625">625</a>           Bytes.toBytes(<span class="jxr_string">"val"</span>));
+<a name="626" href="#626">626</a>       region.put(put);
+<a name="627" href="#627">627</a>     }
+<a name="628" href="#628">628</a>     writtenRowCount += moreRow;
+<a name="629" href="#629">629</a>     <em class="jxr_comment">// call flush again</em>
+<a name="630" href="#630">630</a>     throwExceptionWhenFlushing.set(false);
+<a name="631" href="#631">631</a>     <strong class="jxr_keyword">try</strong> {
+<a name="632" href="#632">632</a>       region.flushcache();
+<a name="633" href="#633">633</a>     } <strong class="jxr_keyword">catch</strong> (IOException t) {
+<a name="634" href="#634">634</a>       LOG.info(<span class="jxr_string">"Expected exception when flushing region because server is stopped,"</span>
+<a name="635" href="#635">635</a>           + t.getMessage());
+<a name="636" href="#636">636</a>     }
+<a name="637" href="#637">637</a> 
+<a name="638" href="#638">638</a>     region.close(<strong class="jxr_keyword">true</strong>);
+<a name="639" href="#639">639</a>     wal.close();
+<a name="640" href="#640">640</a> 
+<a name="641" href="#641">641</a>     <em class="jxr_comment">// Let us try to split and recover</em>
+<a name="642" href="#642">642</a>     runWALSplit(<strong class="jxr_keyword">this</strong>.conf);
+<a name="643" href="#643">643</a>     HLog wal2 = createWAL(<strong class="jxr_keyword">this</strong>.conf);
+<a name="644" href="#644">644</a>     Mockito.doReturn(false).when(rsServices).isAborted();
+<a name="645" href="#645">645</a>     HRegion region2 = <strong class="jxr_keyword">new</strong> HRegion(basedir, wal2, <strong class="jxr_keyword">this</strong>.fs, <strong class="jxr_keyword">this</strong>.conf, hri, htd,
+<a name="646" href="#646">646</a>         rsServices);
+<a name="647" href="#647">647</a>     <strong class="jxr_keyword">long</strong> seqid2 = region2.initialize();
+<a name="648" href="#648">648</a>     <em class="jxr_comment">// HRegionServer usually does this. It knows the largest seqid across all</em>
+<a name="649" href="#649">649</a>     <em class="jxr_comment">// regions.</em>
+<a name="650" href="#650">650</a>     wal2.setSequenceNumber(seqid2);
+<a name="651" href="#651">651</a> 
+<a name="652" href="#652">652</a>     scanner = region2.getScanner(<strong class="jxr_keyword">new</strong> Scan());
+<a name="653" href="#653">653</a>     assertEquals(writtenRowCount, getScannedCount(scanner));
+<a name="654" href="#654">654</a>   }
+<a name="655" href="#655">655</a> 
+<a name="656" href="#656">656</a>   <strong class="jxr_keyword">private</strong> <strong class="jxr_keyword">int</strong> getScannedCount(RegionScanner scanner) <strong class="jxr_keyword">throws</strong> IOException {
+<a name="657" href="#657">657</a>     <strong class="jxr_keyword">int</strong> scannedCount = 0;
+<a name="658" href="#658">658</a>     List&lt;KeyValue&gt; results = <strong class="jxr_keyword">new</strong> ArrayList&lt;KeyValue&gt;();
+<a name="659" href="#659">659</a>     <strong class="jxr_keyword">while</strong> (<strong class="jxr_keyword">true</strong>) {
+<a name="660" href="#660">660</a>       <strong class="jxr_keyword">boolean</strong> existMore = scanner.next(results);
+<a name="661" href="#661">661</a>       <strong class="jxr_keyword">if</strong> (!results.isEmpty())
+<a name="662" href="#662">662</a>         scannedCount++;
+<a name="663" href="#663">663</a>       <strong class="jxr_keyword">if</strong> (!existMore)
+<a name="664" href="#664">664</a>         <strong class="jxr_keyword">break</strong>;
+<a name="665" href="#665">665</a>       results.clear();
+<a name="666" href="#666">666</a>     }
+<a name="667" href="#667">667</a>     <strong class="jxr_keyword">return</strong> scannedCount;
+<a name="668" href="#668">668</a>   }
+<a name="669" href="#669">669</a> 
+<a name="670" href="#670">670</a>   <em class="jxr_javadoccomment">/**</em>
+<a name="671" href="#671">671</a> <em class="jxr_javadoccomment">   * Create an HRegion with the result of a HLog split and test we only see the</em>
+<a name="672" href="#672">672</a> <em class="jxr_javadoccomment">   * good edits</em>
+<a name="673" href="#673">673</a> <em class="jxr_javadoccomment">   * @throws Exception</em>
+<a name="674" href="#674">674</a> <em class="jxr_javadoccomment">   */</em>
+<a name="675" href="#675">675</a>   @Test
+<a name="676" href="#676">676</a>   <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">void</strong> testReplayEditsWrittenIntoWAL() <strong class="jxr_keyword">throws</strong> Exception {
+<a name="677" href="#677">677</a>     <strong class="jxr_keyword">final</strong> String tableNameStr = <span class="jxr_string">"testReplayEditsWrittenIntoWAL"</span>;
+<a name="678" href="#678">678</a>     <strong class="jxr_keyword">final</strong> HRegionInfo hri = createBasic3FamilyHRegionInfo(tableNameStr);
+<a name="679" href="#679">679</a>     <strong class="jxr_keyword">final</strong> Path basedir = <strong class="jxr_keyword">new</strong> Path(hbaseRootDir, tableNameStr);
+<a name="680" href="#680">680</a>     deleteDir(basedir);
+<a name="681" href="#681">681</a>     fs.mkdirs(<strong class="jxr_keyword">new</strong> Path(basedir, hri.getEncodedName()));
+<a name="682" href="#682">682</a>     <strong class="jxr_keyword">final</strong> HTableDescriptor htd = createBasic3FamilyHTD(tableNameStr);
+<a name="683" href="#683">683</a>     HRegion region2 = HRegion.createHRegion(hri,
+<a name="684" href="#684">684</a>             hbaseRootDir, <strong class="jxr_keyword">this</strong>.conf, htd);
+<a name="685" href="#685">685</a>     region2.close();
+<a name="686" href="#686">686</a>     region2.getLog().closeAndDelete();
+<a name="687" href="#687">687</a>     <strong class="jxr_keyword">final</strong> HLog wal = createWAL(<strong class="jxr_keyword">this</strong>.conf);
+<a name="688" href="#688">688</a>     <strong class="jxr_keyword">final</strong> byte[] tableName = Bytes.toBytes(tableNameStr);
+<a name="689" href="#689">689</a>     <strong class="jxr_keyword">final</strong> byte[] rowName = tableName;
+<a name="690" href="#690">690</a>     <strong class="jxr_keyword">final</strong> byte[] regionName = hri.getEncodedNameAsBytes();
+<a name="691" href="#691">691</a> 
+<a name="692" href="#692">692</a>     <em class="jxr_comment">// Add 1k to each family.</em>
+<a name="693" href="#693">693</a>     <strong class="jxr_keyword">final</strong> <strong class="jxr_keyword">int</strong> countPerFamily = 1000;
+<a name="694" href="#694">694</a>     <strong class="jxr_keyword">for</strong> (HColumnDescriptor hcd: htd.getFamilies()) {
+<a name="695" href="#695">695</a>       addWALEdits(tableName, hri, rowName, hcd.getName(), countPerFamily,
+<a name="696" href="#696">696</a>           ee, wal, htd);
+<a name="697" href="#697">697</a>     }
+<a name="698" href="#698">698</a> 
+<a name="699" href="#699">699</a>     <em class="jxr_comment">// Add a cache flush, shouldn't have any effect</em>
+<a name="700" href="#700">700</a>     <strong class="jxr_keyword">long</strong> logSeqId = wal.startCacheFlush(regionName);
+<a name="701" href="#701">701</a>     wal.completeCacheFlush(regionName, tableName, logSeqId, hri.isMetaRegion());
+<a name="702" href="#702">702</a> 
+<a name="703" href="#703">703</a>     <em class="jxr_comment">// Add an edit to another family, should be skipped.</em>
+<a name="704" href="#704">704</a>     WALEdit edit = <strong class="jxr_keyword">new</strong> WALEdit();
+<a name="705" href="#705">705</a>     <strong class="jxr_keyword">long</strong> now = ee.currentTimeMillis();
+<a name="706" href="#706">706</a>     edit.add(<strong class="jxr_keyword">new</strong> KeyValue(rowName, Bytes.toBytes(<span class="jxr_string">"another family"</span>), rowName,
+<a name="707" href="#707">707</a>       now, rowName));
+<a name="708" href="#708">708</a>     wal.append(hri, tableName, edit, now, htd);
+<a name="709" href="#709">709</a> 
+<a name="710" href="#710">710</a>     <em class="jxr_comment">// Delete the c family to verify deletes make it over.</em>
+<a name="711" href="#711">711</a>     edit = <strong class="jxr_keyword">new</strong> WALEdit();
+<a name="712" href="#712">712</a>     now = ee.currentTimeMillis();
+<a name="713" href="#713">713</a>     edit.add(<strong class="jxr_keyword">new</strong> KeyValue(rowName, Bytes.toBytes(<span class="jxr_string">"c"</span>), <strong class="jxr_keyword">null</strong>, now,
+<a name="714" href="#714">714</a>       KeyValue.Type.DeleteFamily));
+<a name="715" href="#715">715</a>     wal.append(hri, tableName, edit, now, htd);
+<a name="716" href="#716">716</a> 
+<a name="717" href="#717">717</a>     <em class="jxr_comment">// Sync.</em>
+<a name="718" href="#718">718</a>     wal.sync();
+<a name="719" href="#719">719</a>     <em class="jxr_comment">// Set down maximum recovery so we dfsclient doesn't linger retrying something</em>
+<a name="720" href="#720">720</a>     <em class="jxr_comment">// long gone.</em>
+<a name="721" href="#721">721</a>     HBaseTestingUtility.setMaxRecoveryErrorCount(wal.getOutputStream(), 1);
+<a name="722" href="#722">722</a>     <em class="jxr_comment">// Make a new conf and a new fs for the splitter to run on so we can take</em>
+<a name="723" href="#723">723</a>     <em class="jxr_comment">// over old wal.</em>
+<a name="724" href="#724">724</a>     <strong class="jxr_keyword">final</strong> Configuration newConf = HBaseConfiguration.create(<strong class="jxr_keyword">this</strong>.conf);
+<a name="725" href="#725">725</a>     User user = HBaseTestingUtility.getDifferentUser(newConf,
+<a name="726" href="#726">726</a>       <span class="jxr_string">".replay.wal.secondtime"</span>);
+<a name="727" href="#727">727</a>     user.runAs(<strong class="jxr_keyword">new</strong> PrivilegedExceptionAction() {
+<a name="728" href="#728">728</a>       <strong class="jxr_keyword">public</strong> Object run() <strong class="jxr_keyword">throws</strong> Exception {
+<a name="729" href="#729">729</a>         runWALSplit(newConf);
+<a name="730" href="#730">730</a>         FileSystem newFS = FileSystem.get(newConf);
+<a name="731" href="#731">731</a>         <em class="jxr_comment">// 100k seems to make for about 4 flushes during HRegion#initialize.</em>
+<a name="732" href="#732">732</a>         newConf.setInt(HConstants.HREGION_MEMSTORE_FLUSH_SIZE, 1024 * 100);
+<a name="733" href="#733">733</a>         <em class="jxr_comment">// Make a new wal for new region.</em>
+<a name="734" href="#734">734</a>         HLog newWal = createWAL(newConf);
+<a name="735" href="#735">735</a>         <strong class="jxr_keyword">final</strong> AtomicInteger flushcount = <strong class="jxr_keyword">new</strong> AtomicInteger(0);
+<a name="736" href="#736">736</a>         <strong class="jxr_keyword">try</strong> {
+<a name="737" href="#737">737</a>           <strong class="jxr_keyword">final</strong> HRegion region =
+<a name="738" href="#738">738</a>               <strong class="jxr_keyword">new</strong> HRegion(basedir, newWal, newFS, newConf, hri, htd, <strong class="jxr_keyword">null</strong>) {
+<a name="739" href="#739">739</a>             <strong class="jxr_keyword">protected</strong> <strong class="jxr_keyword">boolean</strong> internalFlushcache(
+<a name="740" href="#740">740</a>                 <strong class="jxr_keyword">final</strong> HLog wal, <strong class="jxr_keyword">final</strong> <strong class="jxr_keyword">long</strong> myseqid, MonitoredTask status)
+<a name="741" href="#741">741</a>             <strong class="jxr_keyword">throws</strong> IOException {
+<a name="742" href="#742">742</a>               LOG.info(<span class="jxr_string">"InternalFlushCache Invoked"</span>);
+<a name="743" href="#743">743</a>               <strong class="jxr_keyword">boolean</strong> b = <strong class="jxr_keyword">super</strong>.internalFlushcache(wal, myseqid,
+<a name="744" href="#744">744</a>                   Mockito.mock(MonitoredTask.<strong class="jxr_keyword">class</strong>));
+<a name="745" href="#745">745</a>               flushcount.incrementAndGet();
+<a name="746" href="#746">746</a>               <strong class="jxr_keyword">return</strong> b;
+<a name="747" href="#747">747</a>             };
+<a name="748" href="#748">748</a>           };
+<a name="749" href="#749">749</a>           <strong class="jxr_keyword">long</strong> seqid = region.initialize();
+<a name="750" href="#750">750</a>           <em class="jxr_comment">// We flushed during init.</em>
+<a name="751" href="#751">751</a>           assertTrue(<span class="jxr_string">"Flushcount="</span> + flushcount.get(), flushcount.get() &gt; 0);
+<a name="752" href="#752">752</a>           assertTrue(seqid &gt; wal.getSequenceNumber());
+<a name="753" href="#753">753</a> 
+<a name="754" href="#754">754</a>           Get get = <strong class="jxr_keyword">new</strong> Get(rowName);
+<a name="755" href="#755">755</a>           Result result = region.get(get, -1);
+<a name="756" href="#756">756</a>           <em class="jxr_comment">// Make sure we only see the good edits</em>
+<a name="757" href="#757">757</a>           assertEquals(countPerFamily * (htd.getFamilies().size() - 1),
+<a name="758" href="#758">758</a>             result.size());
+<a name="759" href="#759">759</a>           region.close();
+<a name="760" href="#760">760</a>         } <strong class="jxr_keyword">finally</strong> {
+<a name="761" href="#761">761</a>           newWal.closeAndDelete();
+<a name="762" href="#762">762</a>         }
+<a name="763" href="#763">763</a>         <strong class="jxr_keyword">return</strong> <strong class="jxr_keyword">null</strong>;
+<a name="764" href="#764">764</a>       }
+<a name="765" href="#765">765</a>     });
+<a name="766" href="#766">766</a>   }
+<a name="767" href="#767">767</a> 
+<a name="768" href="#768">768</a>   @Test
+<a name="769" href="#769">769</a>   <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">void</strong> testSequentialEditLogSeqNum() <strong class="jxr_keyword">throws</strong> IOException {
+<a name="770" href="#770">770</a>     <strong class="jxr_keyword">final</strong> String tableNameStr = <span class="jxr_string">"testSequentialEditLogSeqNum"</span>;
+<a name="771" href="#771">771</a>     <strong class="jxr_keyword">final</strong> HRegionInfo hri = createBasic3FamilyHRegionInfo(tableNameStr);
+<a name="772" href="#772">772</a>     <strong class="jxr_keyword">final</strong> Path basedir = <strong class="jxr_keyword">new</strong> Path(<strong class="jxr_keyword">this</strong>.hbaseRootDir, tableNameStr);
+<a name="773" href="#773">773</a>     deleteDir(basedir);
+<a name="774" href="#774">774</a>     <strong class="jxr_keyword">final</strong> byte[] rowName = Bytes.toBytes(tableNameStr);
+<a name="775" href="#775">775</a>     <strong class="jxr_keyword">final</strong> <strong class="jxr_keyword">int</strong> countPerFamily = 10;
+<a name="776" href="#776">776</a>     <strong class="jxr_keyword">final</strong> HTableDescriptor htd = createBasic1FamilyHTD(tableNameStr);
+<a name="777" href="#777">777</a> 
+<a name="778" href="#778">778</a>     <em class="jxr_comment">// Mock the HLog</em>
+<a name="779" href="#779">779</a>     <a href="../../../../../../org/apache/hadoop/hbase/regionserver/wal/TestWALReplay.html">MockHLog</a> wal = createMockWAL(<strong class="jxr_keyword">this</strong>.conf);
+<a name="780" href="#780">780</a>     
+<a name="781" href="#781">781</a>     HRegion region = <strong class="jxr_keyword">new</strong> HRegion(basedir, wal, <strong class="jxr_keyword">this</strong>.fs, <strong class="jxr_keyword">this</strong>.conf, hri, htd, <strong class="jxr_keyword">null</strong>);
+<a name="782" href="#782">782</a>     <strong class="jxr_keyword">long</strong> seqid = region.initialize();
+<a name="783" href="#783">783</a>     <em class="jxr_comment">// HRegionServer usually does this. It knows the largest seqid across all</em>
+<a name="784" href="#784">784</a>     <em class="jxr_comment">// regions.</em>
+<a name="785" href="#785">785</a>     wal.setSequenceNumber(seqid);
+<a name="786" href="#786">786</a>     <strong class="jxr_keyword">for</strong> (HColumnDescriptor hcd : htd.getFamilies()) {
+<a name="787" href="#787">787</a>       addRegionEdits(rowName, hcd.getName(), countPerFamily, <strong class="jxr_keyword">this</strong>.ee, region, <span class="jxr_string">"x"</span>);
+<a name="788" href="#788">788</a>     }
+<a name="789" href="#789">789</a>     <em class="jxr_comment">// get the seq no after first set of entries.</em>
+<a name="790" href="#790">790</a>     <strong class="jxr_keyword">long</strong> sequenceNumber = wal.getSequenceNumber();
+<a name="791" href="#791">791</a> 
+<a name="792" href="#792">792</a>     <em class="jxr_comment">// Let us flush the region</em>
+<a name="793" href="#793">793</a>     <em class="jxr_comment">// But this time completeflushcache is not yet done</em>
+<a name="794" href="#794">794</a>     region.flushcache();
+<a name="795" href="#795">795</a>     <strong class="jxr_keyword">for</strong> (HColumnDescriptor hcd : htd.getFamilies()) {
+<a name="796" href="#796">796</a>       addRegionEdits(rowName, hcd.getName(), 5, <strong class="jxr_keyword">this</strong>.ee, region, <span class="jxr_string">"x"</span>);
+<a name="797" href="#797">797</a>     }
+<a name="798" href="#798">798</a>     <strong class="jxr_keyword">long</strong> lastestSeqNumber = wal.getSequenceNumber();
+<a name="799" href="#799">799</a>     <em class="jxr_comment">// get the current seq no</em>
+<a name="800" href="#800">800</a>     wal.doCompleteCacheFlush = <strong class="jxr_keyword">true</strong>;
+<a name="801" href="#801">801</a>     <em class="jxr_comment">// allow complete cache flush with the previous seq number got after first</em>
+<a name="802" href="#802">802</a>     <em class="jxr_comment">// set of edits.</em>
+<a name="803" href="#803">803</a>     wal.completeCacheFlush(hri.getEncodedNameAsBytes(), hri.getTableName(), sequenceNumber, false);
+<a name="804" href="#804">804</a>     wal.close();
+<a name="805" href="#805">805</a>     FileStatus[] listStatus = <strong class="jxr_keyword">this</strong>.fs.listStatus(wal.getDir());
+<a name="806" href="#806">806</a>     HLogSplitter.splitLogFile(hbaseRootDir, listStatus[0], <strong class="jxr_keyword">this</strong>.fs, <strong class="jxr_keyword">this</strong>.conf,
+<a name="807" href="#807">807</a>         <strong class="jxr_keyword">null</strong>);
+<a name="808" href="#808">808</a>     FileStatus[] listStatus1 = <strong class="jxr_keyword">this</strong>.fs.listStatus(<strong class="jxr_keyword">new</strong> Path(hbaseRootDir + <span class="jxr_string">"/"</span>
+<a name="809" href="#809">809</a>         + tableNameStr + <span class="jxr_string">"/"</span> + hri.getEncodedName() + <span class="jxr_string">"/recovered.edits"</span>));
+<a name="810" href="#810">810</a>     <strong class="jxr_keyword">int</strong> editCount = 0;
+<a name="811" href="#811">811</a>     <strong class="jxr_keyword">for</strong> (FileStatus fileStatus : listStatus1) {
+<a name="812" href="#812">812</a>       editCount = Integer.parseInt(fileStatus.getPath().getName());
+<a name="813" href="#813">813</a>     }
+<a name="814" href="#814">814</a>     <em class="jxr_comment">// The sequence number should be same </em>
+<a name="815" href="#815">815</a>     assertEquals(
+<a name="816" href="#816">816</a>         <span class="jxr_string">"The sequence number of the recoverd.edits and the current edit seq should be same"</span>,
+<a name="817" href="#817">817</a>         lastestSeqNumber, editCount);
+<a name="818" href="#818">818</a>   }
+<a name="819" href="#819">819</a>   
+<a name="820" href="#820">820</a>    <strong class="jxr_keyword">static</strong> <strong class="jxr_keyword">class</strong> <a href="../../../../../../org/apache/hadoop/hbase/regionserver/wal/TestWALReplay.html">MockHLog</a> <strong class="jxr_keyword">extends</strong> HLog {
+<a name="821" href="#821">821</a>     <strong class="jxr_keyword">boolean</strong> doCompleteCacheFlush = false;
+<a name="822" href="#822">822</a> 
+<a name="823" href="#823">823</a>     <strong class="jxr_keyword">public</strong> <a href="../../../../../../org/apache/hadoop/hbase/regionserver/wal/TestWALReplay.html">MockHLog</a>(FileSystem fs, Path dir, Path oldLogDir, Configuration conf) <strong class="jxr_keyword">throws</strong> IOException {
+<a name="824" href="#824">824</a>       <strong class="jxr_keyword">super</strong>(fs, dir, oldLogDir, conf);
+<a name="825" href="#825">825</a>     }
+<a name="826" href="#826">826</a> 
+<a name="827" href="#827">827</a>     @Override
+<a name="828" href="#828">828</a>     <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">void</strong> completeCacheFlush(byte[] encodedRegionName, byte[] tableName, <strong class="jxr_keyword">long</strong> logSeqId,
+<a name="829" href="#829">829</a>         <strong class="jxr_keyword">boolean</strong> isMetaRegion) <strong class="jxr_keyword">throws</strong> IOException {
+<a name="830" href="#830">830</a>       <strong class="jxr_keyword">if</strong> (!doCompleteCacheFlush) {
+<a name="831" href="#831">831</a>         <strong class="jxr_keyword">return</strong>;
+<a name="832" href="#832">832</a>       }
+<a name="833" href="#833">833</a>       <strong class="jxr_keyword">super</strong>.completeCacheFlush(encodedRegionName, tableName, logSeqId, isMetaRegion);
+<a name="834" href="#834">834</a>     }
+<a name="835" href="#835">835</a>   }
+<a name="836" href="#836">836</a> 
+<a name="837" href="#837">837</a>   <strong class="jxr_keyword">private</strong> HTableDescriptor createBasic1FamilyHTD(<strong class="jxr_keyword">final</strong> String tableName) {
+<a name="838" href="#838">838</a>     HTableDescriptor htd = <strong class="jxr_keyword">new</strong> HTableDescriptor(tableName);
+<a name="839" href="#839">839</a>     HColumnDescriptor a = <strong class="jxr_keyword">new</strong> HColumnDescriptor(Bytes.toBytes(<span class="jxr_string">"a"</span>));
+<a name="840" href="#840">840</a>     htd.addFamily(a);
+<a name="841" href="#841">841</a>     <strong class="jxr_keyword">return</strong> htd;
+<a name="842" href="#842">842</a>   }
+<a name="843" href="#843">843</a>   
+<a name="844" href="#844">844</a>   <strong class="jxr_keyword">private</strong> <a href="../../../../../../org/apache/hadoop/hbase/regionserver/wal/TestWALReplay.html">MockHLog</a> createMockWAL(Configuration conf) <strong class="jxr_keyword">throws</strong> IOException {
+<a name="845" href="#845">845</a>     <a href="../../../../../../org/apache/hadoop/hbase/regionserver/wal/TestWALReplay.html">MockHLog</a> wal = <strong class="jxr_keyword">new</strong> <a href="../../../../../../org/apache/hadoop/hbase/regionserver/wal/TestWALReplay.html">MockHLog</a>(FileSystem.get(conf), logDir, oldLogDir, conf);
+<a name="846" href="#846">846</a>     <em class="jxr_comment">// Set down maximum recovery so we dfsclient doesn't linger retrying something</em>
+<a name="847" href="#847">847</a>     <em class="jxr_comment">// long gone.</em>
+<a name="848" href="#848">848</a>     HBaseTestingUtility.setMaxRecoveryErrorCount(wal.getOutputStream(), 1);
+<a name="849" href="#849">849</a>     <strong class="jxr_keyword">return</strong> wal;
+<a name="850" href="#850">850</a>   }
+<a name="851" href="#851">851</a>   
+<a name="852" href="#852">852</a>     
+<a name="853" href="#853">853</a>   <em class="jxr_comment">// Flusher used in this test.  Keep count of how often we are called and</em>
+<a name="854" href="#854">854</a>   <em class="jxr_comment">// actually run the flush inside here.</em>
+<a name="855" href="#855">855</a>   <strong class="jxr_keyword">class</strong> <a href="../../../../../../org/apache/hadoop/hbase/regionserver/wal/TestWALReplay.html">TestFlusher</a> implements FlushRequester {
+<a name="856" href="#856">856</a>     <strong class="jxr_keyword">private</strong> <strong class="jxr_keyword">int</strong> count = 0;
+<a name="857" href="#857">857</a>     <strong class="jxr_keyword">private</strong> HRegion r;
+<a name="858" href="#858">858</a> 
+<a name="859" href="#859">859</a>     @Override
+<a name="860" href="#860">860</a>     <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">void</strong> requestFlush(HRegion region) {
+<a name="861" href="#861">861</a>       count++;
+<a name="862" href="#862">862</a>       <strong class="jxr_keyword">try</strong> {
+<a name="863" href="#863">863</a>         r.flushcache();
+<a name="864" href="#864">864</a>       } <strong class="jxr_keyword">catch</strong> (IOException e) {
+<a name="865" href="#865">865</a>         <strong class="jxr_keyword">throw</strong> <strong class="jxr_keyword">new</strong> RuntimeException(<span class="jxr_string">"Exception flushing"</span>, e);
+<a name="866" href="#866">866</a>       }
+<a name="867" href="#867">867</a>     }
+<a name="868" href="#868">868</a> 
+<a name="869" href="#869">869</a>     @Override
+<a name="870" href="#870">870</a>     <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">void</strong> requestDelayedFlush(HRegion region, <strong class="jxr_keyword">long</strong> when) {
+<a name="871" href="#871">871</a>       <em class="jxr_comment">// TODO Auto-generated method stub</em>
+<a name="872" href="#872">872</a>       
+<a name="873" href="#873">873</a>     }
+<a name="874" href="#874">874</a>   }
+<a name="875" href="#875">875</a> 
+<a name="876" href="#876">876</a>   <strong class="jxr_keyword">private</strong> <strong class="jxr_keyword">void</strong> addWALEdits (<strong class="jxr_keyword">final</strong> byte [] tableName, <strong class="jxr_keyword">final</strong> HRegionInfo hri,
+<a name="877" href="#877">877</a>       <strong class="jxr_keyword">final</strong> byte [] rowName, <strong class="jxr_keyword">final</strong> byte [] family,
+<a name="878" href="#878">878</a>       <strong class="jxr_keyword">final</strong> <strong class="jxr_keyword">int</strong> count, EnvironmentEdge ee, <strong class="jxr_keyword">final</strong> HLog wal, <strong class="jxr_keyword">final</strong> HTableDescriptor htd)
+<a name="879" href="#879">879</a>   <strong class="jxr_keyword">throws</strong> IOException {
+<a name="880" href="#880">880</a>     String familyStr = Bytes.toString(family);
+<a name="881" href="#881">881</a>     <strong class="jxr_keyword">for</strong> (<strong class="jxr_keyword">int</strong> j = 0; j &lt; count; j++) {
+<a name="882" href="#882">882</a>       byte[] qualifierBytes = Bytes.toBytes(Integer.toString(j));
+<a name="883" href="#883">883</a>       byte[] columnBytes = Bytes.toBytes(familyStr + <span class="jxr_string">":"</span> + Integer.toString(j));
+<a name="884" href="#884">884</a>       WALEdit edit = <strong class="jxr_keyword">new</strong> WALEdit();
+<a name="885" href="#885">885</a>       edit.add(<strong class="jxr_keyword">new</strong> KeyValue(rowName, family, qualifierBytes,
+<a name="886" href="#886">886</a>         ee.currentTimeMillis(), columnBytes));
+<a name="887" href="#887">887</a>       wal.append(hri, tableName, edit, ee.currentTimeMillis(), htd);
+<a name="888" href="#888">888</a>     }
+<a name="889" href="#889">889</a>   }
+<a name="890" href="#890">890</a> 
+<a name="891" href="#891">891</a>   <strong class="jxr_keyword">private</strong> <strong class="jxr_keyword">void</strong> addRegionEdits (<strong class="jxr_keyword">final</strong> byte [] rowName, <strong class="jxr_keyword">final</strong> byte [] family,
+<a name="892" href="#892">892</a>       <strong class="jxr_keyword">final</strong> <strong class="jxr_keyword">int</strong> count, EnvironmentEdge ee, <strong class="jxr_keyword">final</strong> HRegion r,
+<a name="893" href="#893">893</a>       <strong class="jxr_keyword">final</strong> String qualifierPrefix)
+<a name="894" href="#894">894</a>   <strong class="jxr_keyword">throws</strong> IOException {
+<a name="895" href="#895">895</a>     <strong class="jxr_keyword">for</strong> (<strong class="jxr_keyword">int</strong> j = 0; j &lt; count; j++) {
+<a name="896" href="#896">896</a>       byte[] qualifier = Bytes.toBytes(qualifierPrefix + Integer.toString(j));
+<a name="897" href="#897">897</a>       Put p = <strong class="jxr_keyword">new</strong> Put(rowName);
+<a name="898" href="#898">898</a>       p.add(family, qualifier, ee.currentTimeMillis(), rowName);
+<a name="899" href="#899">899</a>       r.put(p);
+<a name="900" href="#900">900</a>     }
+<a name="901" href="#901">901</a>   }
+<a name="902" href="#902">902</a> 
+<a name="903" href="#903">903</a>   <em class="jxr_comment">/*</em>
+<a name="904" href="#904">904</a> <em class="jxr_comment">   * Creates an HRI around an HTD that has &lt;code&gt;tableName&lt;/code&gt; and three</em>
+<a name="905" href="#905">905</a> <em class="jxr_comment">   * column families named 'a','b', and 'c'.</em>
+<a name="906" href="#906">906</a> <em class="jxr_comment">   * @param tableName Name of table to use when we create HTableDescriptor.</em>
+<a name="907" href="#907">907</a> <em class="jxr_comment">   */</em>
+<a name="908" href="#908">908</a>    <strong class="jxr_keyword">private</strong> HRegionInfo createBasic3FamilyHRegionInfo(<strong class="jxr_keyword">final</strong> String tableName) {
+<a name="909" href="#909">909</a>     <strong class="jxr_keyword">return</strong> <strong class="jxr_keyword">new</strong> HRegionInfo(Bytes.toBytes(tableName), <strong class="jxr_keyword">null</strong>, <strong class="jxr_keyword">null</strong>, false);
+<a name="910" href="#910">910</a>    }
+<a name="911" href="#911">911</a> 
+<a name="912" href="#912">912</a>   <em class="jxr_comment">/*</em>
+<a name="913" href="#913">913</a> <em class="jxr_comment">   * Run the split.  Verify only single split file made.</em>
+<a name="914" href="#914">914</a> <em class="jxr_comment">   * @param c</em>
+<a name="915" href="#915">915</a> <em class="jxr_comment">   * @return The single split file made</em>
+<a name="916" href="#916">916</a> <em class="jxr_comment">   * @throws IOException</em>
+<a name="917" href="#917">917</a> <em class="jxr_comment">   */</em>
+<a name="918" href="#918">918</a>   <strong class="jxr_keyword">private</strong> Path runWALSplit(<strong class="jxr_keyword">final</strong> Configuration c) <strong class="jxr_keyword">throws</strong> IOException {
+<a name="919" href="#919">919</a>     FileSystem fs = FileSystem.get(c);
+<a name="920" href="#920">920</a>     HLogSplitter logSplitter = HLogSplitter.createLogSplitter(c,
+<a name="921" href="#921">921</a>         <strong class="jxr_keyword">this</strong>.hbaseRootDir, <strong class="jxr_keyword">this</strong>.logDir, <strong class="jxr_keyword">this</strong>.oldLogDir, fs);
+<a name="922" href="#922">922</a>     List&lt;Path&gt; splits = logSplitter.splitLog();
+<a name="923" href="#923">923</a>     <em class="jxr_comment">// Split should generate only 1 file since there's only 1 region</em>
+<a name="924" href="#924">924</a>     assertEquals(<span class="jxr_string">"splits="</span> + splits, 1, splits.size());
+<a name="925" href="#925">925</a>     <em class="jxr_comment">// Make sure the file exists</em>
+<a name="926" href="#926">926</a>     assertTrue(fs.exists(splits.get(0)));
+<a name="927" href="#927">927</a>     LOG.info(<span class="jxr_string">"Split file="</span> + splits.get(0));
+<a name="928" href="#928">928</a>     <strong class="jxr_keyword">return</strong> splits.get(0);
+<a name="929" href="#929">929</a>   }
+<a name="930" href="#930">930</a> 
+<a name="931" href="#931">931</a>   <em class="jxr_comment">/*</em>
+<a name="932" href="#932">932</a> <em class="jxr_comment">   * @param c</em>
+<a name="933" href="#933">933</a> <em class="jxr_comment">   * @return WAL with retries set down from 5 to 1 only.</em>
+<a name="934" href="#934">934</a> <em class="jxr_comment">   * @throws IOException</em>
+<a name="935" href="#935">935</a> <em class="jxr_comment">   */</em>
+<a name="936" href="#936">936</a>   <strong class="jxr_keyword">private</strong> HLog createWAL(<strong class="jxr_keyword">final</strong> Configuration c) <strong class="jxr_keyword">throws</strong> IOException {
+<a name="937" href="#937">937</a>     HLog wal = <strong class="jxr_keyword">new</strong> HLog(FileSystem.get(c), logDir, oldLogDir, c);
+<a name="938" href="#938">938</a>     <em class="jxr_comment">// Set down maximum recovery so we dfsclient doesn't linger retrying something</em>
+<a name="939" href="#939">939</a>     <em class="jxr_comment">// long gone.</em>
+<a name="940" href="#940">940</a>     HBaseTestingUtility.setMaxRecoveryErrorCount(wal.getOutputStream(), 1);
+<a name="941" href="#941">941</a>     <strong class="jxr_keyword">return</strong> wal;
+<a name="942" href="#942">942</a>   }
+<a name="943" href="#943">943</a> 
+<a name="944" href="#944">944</a>   <strong class="jxr_keyword">private</strong> HTableDescriptor createBasic3FamilyHTD(<strong class="jxr_keyword">final</strong> String tableName) {
+<a name="945" href="#945">945</a>     HTableDescriptor htd = <strong class="jxr_keyword">new</strong> HTableDescriptor(tableName);
+<a name="946" href="#946">946</a>     HColumnDescriptor a = <strong class="jxr_keyword">new</strong> HColumnDescriptor(Bytes.toBytes(<span class="jxr_string">"a"</span>));
+<a name="947" href="#947">947</a>     htd.addFamily(a);
+<a name="948" href="#948">948</a>     HColumnDescriptor b = <strong class="jxr_keyword">new</strong> HColumnDescriptor(Bytes.toBytes(<span class="jxr_string">"b"</span>));
+<a name="949" href="#949">949</a>     htd.addFamily(b);
+<a name="950" href="#950">950</a>     HColumnDescriptor c = <strong class="jxr_keyword">new</strong> HColumnDescriptor(Bytes.toBytes(<span class="jxr_string">"c"</span>));
+<a name="951" href="#951">951</a>     htd.addFamily(c);
+<a name="952" href="#952">952</a>     <strong class="jxr_keyword">return</strong> htd;
+<a name="953" href="#953">953</a>   }
+<a name="954" href="#954">954</a> 
+<a name="955" href="#955">955</a>   @org.junit.Rule
+<a name="956" href="#956">956</a>   <strong class="jxr_keyword">public</strong> org.apache.hadoop.hbase.ResourceCheckerJUnitRule cu =
+<a name="957" href="#957">957</a>     <strong class="jxr_keyword">new</strong> org.apache.hadoop.hbase.ResourceCheckerJUnitRule();
+<a name="958" href="#958">958</a> }
+<a name="959" href="#959">959</a> 
+</pre>
+<hr/><div id="footer">This page was automatically generated by <a href="http://maven.apache.org/">Maven</a></div></body>
+</html>
+
