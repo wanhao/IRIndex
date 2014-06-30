@@ -29,18 +29,22 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.text.ParseException;
 import java.util.AbstractList;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.NavigableSet;
+import java.util.Queue;
 import java.util.Random;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletionService;
@@ -98,10 +102,14 @@ import org.apache.hadoop.hbase.client.RowLock;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.coprocessor.Exec;
 import org.apache.hadoop.hbase.client.coprocessor.ExecResult;
+import org.apache.hadoop.hbase.index.client.IndexConstants;
+import org.apache.hadoop.hbase.index.client.Range;
+import org.apache.hadoop.hbase.index.client.RangeList;
 import org.apache.hadoop.hbase.errorhandling.ForeignExceptionSnare;
 import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
 import org.apache.hadoop.hbase.filter.Filter;
 import org.apache.hadoop.hbase.filter.FilterBase;
+import org.apache.hadoop.hbase.filter.FilterList.Operator;
 import org.apache.hadoop.hbase.filter.IncompatibleFilterException;
 import org.apache.hadoop.hbase.filter.WritableByteArrayComparable;
 import org.apache.hadoop.hbase.io.HeapSize;
@@ -116,6 +124,13 @@ import org.apache.hadoop.hbase.monitoring.MonitoredTask;
 import org.apache.hadoop.hbase.monitoring.TaskMonitor;
 import org.apache.hadoop.hbase.protobuf.generated.HBaseProtos.SnapshotDescription;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionRequest;
+import org.apache.hadoop.hbase.index.regionserver.ByteArray;
+import org.apache.hadoop.hbase.index.regionserver.QuickSort;
+import org.apache.hadoop.hbase.index.regionserver.ScanPreprocess;
+import org.apache.hadoop.hbase.index.regionserver.ScanPreprocess.ConditionTree;
+import org.apache.hadoop.hbase.index.regionserver.ScanPreprocess.ConditionTreeLeafNode;
+import org.apache.hadoop.hbase.index.regionserver.ScanPreprocess.ConditionTreeNoneLeafNode;
+import org.apache.hadoop.hbase.index.regionserver.StoreIndexScanner;
 import org.apache.hadoop.hbase.regionserver.metrics.OperationMetrics;
 import org.apache.hadoop.hbase.regionserver.metrics.SchemaMetrics;
 import org.apache.hadoop.hbase.regionserver.wal.HLog;
@@ -374,6 +389,14 @@ public class HRegion implements HeapSize { // , Writable{
   private final OperationMetrics opMetrics;
   private final boolean deferredLogSyncDisabled;
 
+  //avaliable indexes
+  private Set<byte[]> avaliableIndexes = 
+      new TreeSet<byte[]>(Bytes.BYTES_COMPARATOR);
+  
+  public Set<byte[]> getAvaliableIndexes(){
+    return this.avaliableIndexes;
+  }
+  
   /**
    * Should only be used for testing purposes
    */
@@ -609,6 +632,12 @@ public class HRegion implements HeapSize { // , Writable{
           Store store = future.get();
 
           this.stores.put(store.getColumnFamilyName().getBytes(), store);
+          
+          //add avaliable indexes
+          for(byte[] qualifier:store.getAvaliableIndexes()){
+            this.avaliableIndexes.add(KeyValue.makeColumn(store.getFamily().getName(), qualifier));
+          }
+          
           // Do not include bulk loaded files when determining seqIdForReplay
           long storeSeqIdForReplay = store.getMaxSequenceId(false);
           maxSeqIdInStores.put(store.getColumnFamilyName().getBytes(), storeSeqIdForReplay);
@@ -3814,6 +3843,13 @@ public class HRegion implements HeapSize { // , Writable{
     private long readPt;
     private HRegion region;
 
+    // use index to speed up scan
+    private boolean useIndex = false;
+    private ConditionTree indexTree = null;
+    private Queue<byte[]> candidateRows = null;
+    private boolean hitLimit = false;
+    private long indexReadTime = 0, indexMergeTime = 0, indexSortTime = 0, dataReadTime = 0;
+
     public HRegionInfo getRegionInfo() {
       return regionInfo;
     }
@@ -3870,10 +3906,169 @@ public class HRegion implements HeapSize { // , Writable{
       if (!joinedScanners.isEmpty()) {
         this.joinedHeap = new KeyValueHeap(joinedScanners, comparator);
       }
+      
+      // whether to use index
+      byte[] tmpvalue=scan.getAttribute(IndexConstants.SCAN_WITH_INDEX);
+      if(tmpvalue!=null){        
+        this.useIndex = Bytes.toBoolean(tmpvalue);
+      }
+      tmpvalue=scan.getAttribute(IndexConstants.MAX_SCAN_SCALE);
+      float maxScale=IndexConstants.DEFAULT_MAX_SCAN_SCALE;
+      if(tmpvalue!=null){
+        maxScale = Bytes.toFloat(tmpvalue);
+      }
+      if (this.useIndex) {
+        indexTree = ScanPreprocess.preprocess(this.region, scan.getFilter(), maxScale);
+        if (indexTree!=null) {
+          useIndex = true;
+          long buildStartTime = System.currentTimeMillis();
+          generateCandidateRows(scan);
+          this.indexReadTime = (System.currentTimeMillis() - buildStartTime) - this.indexMergeTime - this.indexSortTime;
+        } else {
+          useIndex = false;
+          LOG.debug("skip using index");
+        }
+      }
     }
 
     RegionScannerImpl(Scan scan, HRegion region) throws IOException {
       this(scan, null, region);
+    }
+    
+    private void printIndexTree(ConditionTree tree) {
+      if (tree != null) {
+        if (tree instanceof ConditionTreeLeafNode) {
+          LOG.debug("{" + tree.getRange() + "," + tree.getScale() + "}");
+        } else {
+          StringBuilder sb = new StringBuilder();
+          sb.append("[" + (tree.getOperator() == Operator.MUST_PASS_ALL ? "AND" : "OR") + ","
+              + tree.getScale() + "]--->");
+          for (ConditionTree node : tree.getChildren()) {
+            if (node instanceof ConditionTreeLeafNode) {
+              sb.append("{" + node.getRange() + "," + node.getScale() + "}");
+            } else {
+              sb.append("[" + (node.getOperator() == Operator.MUST_PASS_ALL ? "AND" : "OR") + ","
+                  + node.getScale() + "]");
+            }
+          }
+          
+          for (ConditionTree node : tree.getChildren()) {
+            if (node instanceof ConditionTreeNoneLeafNode) {
+              printIndexTree(node);
+            }
+          }
+          
+          LOG.debug(sb.toString());
+        }
+      }
+    }
+
+    private Set<ByteArray> readAndMergeIndex(ConditionTree root, Scan scan,
+        Set<ByteArray> indexHeap, Operator operator) throws IOException {
+      if (root instanceof ConditionTreeLeafNode) {
+        StoreIndexScanner currentScanner = null;
+        try {
+          currentScanner =
+              getStore(root.getRange().getFamily()).getStoreIndexScanner(root.getRange(), scan,
+                indexHeap, operator == Operator.MUST_PASS_ALL);
+          indexHeap = currentScanner.doScan();
+          LOG.debug("Finish Process LeafNode:" + "{" + root.getRange() + "," + root.getScale()
+              + "," + indexHeap.size() + "}");
+        } finally {
+          if (currentScanner != null) currentScanner.close();
+        }
+
+        return indexHeap;
+      } else {
+        Set<ByteArray> newHeap = new HashSet<ByteArray>(10000);
+        for (ConditionTree node : root.getChildren()) {
+          newHeap = readAndMergeIndex(node, scan, newHeap, root.getOperator());
+          if (root.getOperator() == Operator.MUST_PASS_ALL && newHeap.isEmpty()) break;
+        }
+
+        Set<ByteArray> result = null;
+        if (newHeap.isEmpty()) {
+          result = (operator == Operator.MUST_PASS_ALL ? newHeap : indexHeap);
+        } else {
+          Set<ByteArray> small = indexHeap.size() > newHeap.size() ? newHeap : indexHeap;
+          Set<ByteArray> large = indexHeap.size() > newHeap.size() ? indexHeap : newHeap;
+
+          if (operator == Operator.MUST_PASS_ALL) {
+            if(small.isEmpty()){
+              result=large;
+            }else{              
+              result = new HashSet<ByteArray>(10000);
+              for (ByteArray ba : large) {
+                if (small.contains(ba)) result.add(ba);
+              }
+            }
+          } else {
+            large.addAll(small);
+            result = large;
+          }
+        }
+        LOG.debug("Finish Process NoneLeafNode:" + "["
+            + (root.getOperator() == Operator.MUST_PASS_ALL ? "AND" : "OR") + "," + root.getScale()
+            + "," + result.size() + "]");
+        return result;
+      }
+    }
+    
+    private void generateCandidateRows(Scan scan) throws IOException {
+      Set<ByteArray> indexHeap = new HashSet<ByteArray>(10000);
+      printIndexTree(this.indexTree);
+      indexHeap = readAndMergeIndex(indexTree, scan, indexHeap, Operator.MUST_PASS_ONE);
+
+      if (!indexHeap.isEmpty()) {
+        candidateRows = new ArrayDeque<byte[]>(indexHeap.size() + 1);
+        ByteArray[] heap = indexHeap.toArray(new ByteArray[indexHeap.size()]);
+        long sortStartTime=System.currentTimeMillis();
+        QuickSort.sort(heap, ByteArray.BAC);
+        this.indexSortTime=System.currentTimeMillis()-sortStartTime;
+        
+        long mergeStartTime=System.currentTimeMillis();
+        byte[][] byteHeap = new byte[heap.length][];
+        for (int i = 0; i < heap.length; i++) {
+          byteHeap[i] = heap[i].getByteArray();
+        }
+        this.indexMergeTime=System.currentTimeMillis()-mergeStartTime;
+        for (byte[] tmp : byteHeap) {
+          candidateRows.add(tmp);
+        }
+      }
+    }
+
+    private byte[][] mergeIndexHeap(byte[][] a, byte[][] b) {
+      if (a.length==0|| b.length==0) {
+        return null;
+      }
+      
+      ArrayList<byte[]> list = new ArrayList<byte[]>(Math.min(a.length, b.length));
+
+      int cmpResult = 0;
+      for (int i = 0, j = 0; i < a.length && j < b.length;) {
+        cmpResult = Bytes.compareTo(a[i], b[j]);
+
+        if (cmpResult == 0) {
+          list.add(a[i]);
+          i++;
+          j++;
+        } else if (cmpResult < 0) {
+          i++;
+        } else {
+          j++;
+        }
+      }
+      
+      byte[][] c=list.toArray(new byte[list.size()][]);
+
+      LOG.debug("Merge index: a[first=" + Bytes.toStringBinary(a[0]) + ", last="
+          + Bytes.toStringBinary(a[a.length - 1]) + ", count=" + a.length + "]" + ", b[first="
+          + Bytes.toStringBinary(b[0]) + ", last=" + Bytes.toStringBinary(b[b.length - 1])
+          + ", count=" + b.length + "]" + ", c[first=" + Bytes.toStringBinary(c[0]) + ", last="
+          + Bytes.toStringBinary(c[c.length - 1]) + ", count=" + c.length + "]");
+
+      return c;
     }
 
     @Override
@@ -3926,6 +4121,7 @@ public class HRegion implements HeapSize { // , Writable{
     @Override
     public boolean nextRaw(List<KeyValue> outResults, int limit,
         String metric) throws IOException {
+      long dataReadStartTime = System.currentTimeMillis();
       boolean returnResult;
       if (outResults.isEmpty()) {
         // Usually outResults is empty. This is true when next is called
@@ -3936,6 +4132,7 @@ public class HRegion implements HeapSize { // , Writable{
         returnResult = nextInternal(tmpList, limit, metric);
         outResults.addAll(tmpList);
       }
+      this.dataReadTime += System.currentTimeMillis() - dataReadStartTime;
       resetFilters();
       if (isFilterDoneInternal()) {
         return false;
@@ -3989,10 +4186,12 @@ public class HRegion implements HeapSize { // , Writable{
       do {
         heap.next(results, limit - results.size(), metric);
         if (limit > 0 && results.size() == limit) {
+          hitLimit = true;
           return KV_LIMIT;
         }
         nextKv = heap.peek();
       } while (nextKv != null && nextKv.matchingRow(currentRow, offset, length));
+      hitLimit = false;
       return nextKv;
     }
 
@@ -4027,6 +4226,10 @@ public class HRegion implements HeapSize { // , Writable{
           rpcCall.throwExceptionIfCallerDisconnected();
         }
 
+        if (useIndex && !hitLimit && !seekToRowWithIndex()) {
+          return false;
+        }
+        
         // Let's see what we have in the storeHeap.
         KeyValue current = this.storeHeap.peek();
 
@@ -4145,13 +4348,36 @@ public class HRegion implements HeapSize { // , Writable{
       return filter != null
           && filter.filterRowKey(row, offset, length);
     }
+    
+    /**
+     * Seek storeHeap to a row according to index.
+     * @return ture if existed any more rows
+     * @throws IOException
+     */
+    private boolean seekToRowWithIndex() throws IOException {
+      if (candidateRows != null && candidateRows.peek() != null) {
+        this.storeHeap.reseek(KeyValue.createFirstOnRow(candidateRows.poll()));
+        return true;
+      }
+      return false;
+    }
 
     protected boolean nextRow(byte [] currentRow, int offset, short length) throws IOException {
+      resetFilters();
+      hitLimit=false;
+      // use index to indicate if there is a next row
+      // TODO:consider about coprocessor
+      if (useIndex) {
+        if (candidateRows != null && candidateRows.peek() != null) {
+          return true;
+        }
+        return false;
+      }
+      
       KeyValue next;
       while((next = this.storeHeap.peek()) != null && next.matchingRow(currentRow, offset, length)) {
         this.storeHeap.next(MOCKED_LIST);       
       }
-      resetFilters();
       // Calling the hook in CP which allows it to do a fast forward
       if (this.region.getCoprocessorHost() != null) {
         return this.region.getCoprocessorHost().postScannerFilterRow(this, currentRow, offset,
@@ -4180,6 +4406,11 @@ public class HRegion implements HeapSize { // , Writable{
       // no need to sychronize here.
       scannerReadPoints.remove(this);
       this.filterClosed = true;
+      if (useIndex) {
+        LOG.debug(getRegionNameAsString() + "---IndexRead=" + this.indexReadTime
+            + "ms, IndexMerge=" + this.indexMergeTime + "ms, IndexSort=" + this.indexSortTime
+            + "ms, DataRead=" + this.dataReadTime + "ms");
+      }
     }
 
     KeyValueHeap getStoreHeapForTesting() {

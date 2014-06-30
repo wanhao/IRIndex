@@ -62,6 +62,7 @@ import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.ServerCallable;
 import org.apache.hadoop.hbase.client.UserProvider;
 import org.apache.hadoop.hbase.coprocessor.SecureBulkLoadClient;
+import org.apache.hadoop.hbase.index.client.IndexConstants;
 import org.apache.hadoop.hbase.io.HalfStoreFileReader;
 import org.apache.hadoop.hbase.io.Reference;
 import org.apache.hadoop.hbase.io.Reference.Range;
@@ -175,7 +176,8 @@ public class LoadIncrementalHFiles extends Configured implements Tool {
       byte[] family = familyDir.getName().getBytes();
       Path[] hfiles = FileUtil.stat2Paths(fs.listStatus(familyDir));
       for (Path hfile : hfiles) {
-        if (hfile.getName().startsWith("_")) continue;
+        if (hfile.getName().startsWith("_")
+            || hfile.getName().endsWith(IndexConstants.REGION_INDEX_DIR_NAME) ) continue;
         ret.add(new LoadQueueItem(family, hfile));
       }
     }

@@ -34,6 +34,7 @@ import org.apache.hadoop.fs.PathFilter;
 import org.apache.hadoop.hbase.HBaseFileSystem;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HTableDescriptor;
+import org.apache.hadoop.hbase.index.client.IndexConstants;
 import org.apache.hadoop.hbase.regionserver.HRegion;
 import org.apache.hadoop.hbase.regionserver.StoreFile;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -229,6 +230,13 @@ public class HFileArchiver {
     StoreToFile getStorePath = new StoreToFile(fs);
     Collection<File> storeFiles = Collections2.transform(compactedFiles, getStorePath);
 
+    // add index files if exist
+    FileableIndexPath indexPath = new FileableIndexPath(fs, compactedFiles);
+    if (!indexPath.getChildren().isEmpty()) {
+      storeFiles = new ArrayList<File>(storeFiles);
+      storeFiles.add(indexPath);
+    }
+    
     // do the actual archive
     if (!resolveAndArchive(fs, storeArchiveDir, storeFiles)) {
       throw new IOException("Failed to archive/delete all the files for region:"
@@ -623,6 +631,111 @@ public class HFileArchiver {
     @Override
     public String toString() {
       return this.getClass() + ", file:" + getPath().toString();
+    }
+  }
+
+  private static class FileableIndexFile extends File {
+    Path file;
+
+    public FileableIndexFile(FileSystem fs, Path file) {
+      super(fs);
+      this.file = file;
+    }
+
+    @Override
+    public void delete() throws IOException {
+      HBaseFileSystem.deleteFileFromFileSystem(fs, file);
+    }
+
+    @Override
+    public String getName() {
+      return file.getName();
+    }
+
+    @Override
+    public boolean isFile() {
+      return true;
+    }
+
+    @Override
+    public Collection<File> getChildren() throws IOException {
+      // storefiles don't have children
+      return Collections.emptyList();
+    }
+
+    @Override
+    public void close() throws IOException {
+    }
+
+    @Override
+    Path getPath() {
+      return file;
+    }
+  }
+
+  private static class FileableIndexPath extends File {
+    private final Path indexPath;
+    private final Collection<Path> compactedIndexFiles = new ArrayList<Path>();
+
+    public FileableIndexPath(FileSystem fs, Collection<StoreFile> compactedFiles)
+        throws IOException {
+      super(fs);
+      if (compactedFiles != null && !compactedFiles.isEmpty()) {
+        this.indexPath =
+            new Path(compactedFiles.iterator().next().getPath().getParent(),
+                IndexConstants.REGION_INDEX_DIR_NAME);
+        for (StoreFile sf : compactedFiles) {
+          Path indexfile = new Path(indexPath, sf.getPath().getName());
+          if (fs.exists(indexfile)) {
+            this.compactedIndexFiles.add(indexfile);
+          }
+        }
+      } else {
+        indexPath = null;
+      }
+    }
+
+    @Override
+    public void delete() throws IOException {
+      if (!compactedIndexFiles.isEmpty()) {
+        for (Path indexfile : compactedIndexFiles) {
+          if (!HBaseFileSystem.deleteFileFromFileSystem(fs, indexfile)) throw new IOException(
+              "Failed to delete:" + indexfile);
+        }
+      }
+    }
+
+    @Override
+    public String getName() {
+      return indexPath.getName();
+    }
+
+    @Override
+    public Collection<File> getChildren() throws IOException {
+      if (!compactedIndexFiles.isEmpty()) {
+        Collection<File> list = new ArrayList<File>();
+        for (Path indexfile : compactedIndexFiles) {
+          list.add(new FileableIndexFile(fs, indexfile));
+        }
+        return list;
+      } else {
+        return Collections.emptyList();
+      }
+    }
+
+    @Override
+    public boolean isFile() throws IOException {
+      return false;
+    }
+
+    @Override
+    public void close() throws IOException {
+      // NOOP - files are implicitly closed on removal
+    }
+
+    @Override
+    Path getPath() {
+      return indexPath;
     }
   }
 

@@ -25,10 +25,12 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.NavigableSet;
 import java.util.Random;
 import java.util.Set;
 import java.util.SortedSet;
+import java.util.TreeSet;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletionService;
 import java.util.concurrent.ConcurrentHashMap;
@@ -45,6 +47,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
+import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseFileSystem;
 import org.apache.hadoop.hbase.HColumnDescriptor;
@@ -55,6 +58,10 @@ import org.apache.hadoop.hbase.KeyValue.KVComparator;
 import org.apache.hadoop.hbase.RemoteExceptionHandler;
 import org.apache.hadoop.hbase.backup.HFileArchiver;
 import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.index.client.Range;
+import org.apache.hadoop.hbase.index.client.IndexColumnDescriptor;
+import org.apache.hadoop.hbase.index.client.IndexConstants;
+import org.apache.hadoop.hbase.index.client.IndexDescriptor;
 import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.io.HFileLink;
 import org.apache.hadoop.hbase.io.HeapSize;
@@ -70,6 +77,12 @@ import org.apache.hadoop.hbase.monitoring.MonitoredTask;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactSelection;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionProgress;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionRequest;
+import org.apache.hadoop.hbase.index.regionserver.ByteArray;
+import org.apache.hadoop.hbase.index.regionserver.IndexKeyValue;
+import org.apache.hadoop.hbase.index.regionserver.IndexKeyValue.IndexKVComparator;
+import org.apache.hadoop.hbase.index.regionserver.IndexReader;
+import org.apache.hadoop.hbase.index.regionserver.IndexWriter;
+import org.apache.hadoop.hbase.index.regionserver.StoreIndexScanner;
 import org.apache.hadoop.hbase.regionserver.metrics.SchemaConfigured;
 import org.apache.hadoop.hbase.regionserver.metrics.SchemaMetrics;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -178,6 +191,16 @@ public class Store extends SchemaConfigured implements HeapSize {
   private static int flush_retries_number;
   private static int pauseTime;
 
+  //index
+  private final boolean hasIndex;
+  Map<byte[], IndexDescriptor> indexMap=null;
+  private final Path indexDir;
+  private volatile long indexStoreSize = 0L;
+  IndexKVComparator indexComparator=null;
+  long indexCompactCacheMaxSize;
+  private short indexReplication=1;
+  LocalFileSystem localfs=null;
+  
   /**
    * Constructor
    * @param basedir qualified path under which the region directory lives;
@@ -274,6 +297,89 @@ public class Store extends SchemaConfigured implements HeapSize {
             "hbase.hstore.flush.retries.number must be > 0, not "
                 + Store.flush_retries_number);
       }
+    }
+    
+    // load index
+    IndexColumnDescriptor indexFamily = new IndexColumnDescriptor(family);
+    if (indexFamily.hasIndex()) {
+      indexMap = indexFamily.getAllIndexMap();
+      hasIndex = true;
+    } else {
+      hasIndex = false;
+    }
+
+    this.indexDir = new Path(this.homedir, IndexConstants.REGION_INDEX_DIR_NAME);
+
+    if (hasIndex) {
+      this.indexCompactCacheMaxSize =
+          this.conf.getLong(IndexConstants.HREGION_INDEX_COMPACT_CACHE_MAXSIZE,
+            IndexConstants.DEFAULT_HREGION_INDEX_COMPACT_CACHE_MAXSIZE);
+      this.indexReplication =
+          (short) this.conf.getInt(IndexConstants.INDEXFILE_REPLICATION,
+            IndexConstants.DEFAULT_INDEXFILE_REPLICATION);
+      this.localfs=LocalFileSystem.getLocal(conf);
+      
+      if (!this.fs.exists(this.indexDir)) {
+        if (!this.fs.mkdirs(this.indexDir)) throw new IOException("Failed create of: "
+            + this.indexDir.toString());
+      } else {
+        FileStatus[] indexfiles = fs.listStatus(this.indexDir);
+        for (FileStatus tmp : indexfiles) {
+          if (!validateIndex(tmp.getPath().getName())) {
+            fs.delete(tmp.getPath(), true);
+          } else {
+            if (tmp.getReplication() != this.indexReplication) {
+              fs.setReplication(tmp.getPath(), this.indexReplication);
+            }
+          }
+        }
+      }
+      this.indexComparator = IndexKeyValue.COMPARATOR;
+    } else {
+      if (this.fs.exists(this.indexDir)) {
+        this.fs.delete(this.indexDir, true);
+      }
+    }
+  }
+
+  boolean validateIndex(String indexFileName) {
+    for (StoreFile sf : storefiles) {
+      if (sf.getPath().getName().equals(indexFileName)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public long getIndexSize() {
+    return this.indexStoreSize;
+  }
+  
+  public List<byte[]> getAvaliableIndexes() {
+    List<byte[]> list = new ArrayList<byte[]>();
+    if (hasIndex) {
+      list.addAll(indexMap.keySet());
+    }
+    return list;
+  }
+
+  public float getIndexScanScale(Range r) {
+    long rangeSize = 0, totalSize = 0;
+
+    lock.readLock().lock();
+    try {
+      for (StoreFile sf : this.getStorefiles()) {
+        long[] tmp = sf.getIndexReader().getIndexFileReader().getRangeScale(r);
+        rangeSize += tmp[0];
+        totalSize += tmp[1];
+      }
+    } finally {
+      lock.readLock().unlock();
+    }
+    if (totalSize == 0) {
+      return 0.0f;
+    } else {
+      return (float) (((double) rangeSize) / ((double) totalSize));
     }
   }
 
@@ -644,12 +750,27 @@ public class Store extends SchemaConfigured implements HeapSize {
           "destination store - moving to this filesystem.");
       Path tmpPath = getTmpPath();
       FileUtil.copy(srcFs, srcPath, fs, tmpPath, false, conf);
+      
+      Path srcIndexPath = getIndexFilePathFromHFilePath(srcPath);
+      if (srcFs.exists(srcIndexPath)) {
+        Path tmpIndexPath = getIndexFilePathFromHFilePath(tmpPath);
+        FileUtil.copy(srcFs, srcIndexPath, fs, tmpIndexPath, false, conf);
+      }
+      
       LOG.info("Copied to temporary path on dst filesystem: " + tmpPath);
       srcPath = tmpPath;
     }
 
     Path dstPath =
         StoreFile.getRandomFilename(fs, homedir, (seqNum == -1) ? null : "_SeqId_" + seqNum + "_");
+
+    Path srcIndexPath = getIndexFilePathFromHFilePath(srcPath);
+    if (fs.exists(srcIndexPath)) {
+      Path dstIndexPath = new Path(indexDir, dstPath.getName());
+      LOG.debug("Renaming bulk load index file " + srcIndexPath + " to " + dstIndexPath);
+      StoreFile.rename(fs, srcIndexPath, dstIndexPath);
+    }
+    
     LOG.debug("Renaming bulk load file " + srcPath + " to " + dstPath);
     StoreFile.rename(fs, srcPath, dstPath);
 
@@ -840,6 +961,7 @@ public class Store extends SchemaConfigured implements HeapSize {
       MonitoredTask status)
       throws IOException {
     StoreFile.Writer writer;
+    IndexWriter indexWriter=null;
     // Find the smallest read point across all the Scanners.
     long smallestReadPoint = region.getSmallestReadPoint();
     long flushed = 0;
@@ -883,6 +1005,11 @@ public class Store extends SchemaConfigured implements HeapSize {
         writer = createWriterInTmp(set.size());
         writer.setTimeRangeTracker(snapshotTimeRangeTracker);
         pathName = writer.getPath();
+        
+        TreeSet<IndexKeyValue> indexSet = null;
+        if (hasIndex) {
+          indexSet = new TreeSet<IndexKeyValue>(this.indexComparator);
+        }
         try {
           List<KeyValue> kvs = new ArrayList<KeyValue>();
           boolean hasMore;
@@ -899,11 +1026,24 @@ public class Store extends SchemaConfigured implements HeapSize {
                   kv.setMemstoreTS(0);
                 }
                 writer.append(kv);
+                //generate Index KeyValue
+                if (hasIndex && kv.getType() == KeyValue.Type.Put.getCode()) {
+                  if (indexMap.containsKey(kv.getQualifier())) {
+                    indexSet.add(new IndexKeyValue(kv));
+                  }
+                }
                 flushed += this.memstore.heapSizeChange(kv, true);
               }
               kvs.clear();
             }
           } while (hasMore);
+          
+          if (hasIndex && !indexSet.isEmpty()) {
+            indexWriter = createIndexWriterInTmp(pathName);
+            for (IndexKeyValue tmpkv : indexSet) {
+              indexWriter.append(tmpkv);
+            }
+          }
         } finally {
           // Write out the log sequence number that corresponds to this output
           // hfile.  The hfile is current up to and including logCacheFlushId.
@@ -911,6 +1051,11 @@ public class Store extends SchemaConfigured implements HeapSize {
           writer.appendMetadata(logCacheFlushId, false);
           status.setStatus("Flushing " + this + ": closing flushed file");
           writer.close();
+          
+          if (indexWriter != null) {
+            indexWriter.close();
+          }
+          indexSet = null;
         }
       }
     } finally {
@@ -941,11 +1086,29 @@ public class Store extends SchemaConfigured implements HeapSize {
     // Write-out finished successfully, move into the right spot
     String fileName = path.getName();
     Path dstPath = new Path(homedir, fileName);
+    
+    Path indexPath = new Path(path.toString() + IndexConstants.REGION_INDEX_DIR_NAME);
+    Path indexdstPath = new Path(indexDir, fileName);
+    // make sure to move index file first, otherwise data may be inconsistent
+    if (fs.exists(indexPath)) {
+      String msg = "Renaming flushed index file at " + indexPath + " to " + indexdstPath;
+      LOG.debug(msg);
+      status.setStatus("Flushing " + this + ": " + msg);
+      if (!HBaseFileSystem.renameDirForFileSystem(fs, indexPath, indexdstPath)) {
+        LOG.warn("Unable to rename index file " + indexPath + " to " + indexdstPath);
+      }
+    }
+    
     String msg = "Renaming flushed file at " + path + " to " + dstPath;
     LOG.debug(msg);
     status.setStatus("Flushing " + this + ": " + msg);
-    if (!HBaseFileSystem.renameDirForFileSystem(fs, path, dstPath)) {
-      LOG.warn("Unable to rename " + path + " to " + dstPath);
+    try {
+      if (!HBaseFileSystem.renameDirForFileSystem(fs, path, dstPath)) {
+        LOG.warn("Unable to rename " + path + " to " + dstPath);
+      }
+    } catch (IOException e) {
+      HBaseFileSystem.deleteFileFromFileSystem(fs, indexdstPath);
+      throw e;
     }
 
     status.setStatus("Flushing " + this + ": reopening flushed file");
@@ -967,11 +1130,57 @@ public class Store extends SchemaConfigured implements HeapSize {
     if (LOG.isInfoEnabled()) {
       LOG.info("Added " + sf + ", entries=" + r.getEntries() +
         ", sequenceid=" + logCacheFlushId +
-        ", filesize=" + StringUtils.humanReadableInt(r.length()));
+        ", filesize=" + StringUtils.humanReadableInt(r.length()) +
+        (sf.getIndexReader()==null?"":", indexsize="+StringUtils.humanReadableInt(sf.getIndexReader().length())));
     }
     return sf;
   }
 
+  /*
+   * @return Writer for a new IndexFile in the tmp dir.
+   */
+  IndexWriter createIndexWriterInTmp(Path hfilePath) throws IOException {
+    return createIndexWriterInTmp(hfilePath, this.family.getCompression());
+  }
+
+  IndexWriter createIndexWriterInTmp(Compression.Algorithm compression) throws IOException {
+    return createIndexWriterInTmp(null, compression);
+  }
+  
+  /*
+   * @param compression Compression algorithm to use
+   * @return Writer for a new IndexFile in the tmp dir.
+   */
+  IndexWriter createIndexWriterInTmp(Path hfilePath, Compression.Algorithm compression)
+      throws IOException {
+    return StoreFile.createIndexWriter(this.fs, getIndexFilePathFromHFilePathInTmp(hfilePath), this.indexReplication,
+      this.blocksize, compression, this.indexComparator, this.conf);
+  }
+
+  public static Path getIndexFilePathFromHFilePath(Path hfilePath) throws IOException {
+    return new Path(hfilePath.toString() + IndexConstants.REGION_INDEX_DIR_NAME);
+  }
+  
+  Path getIndexFilePathFromHFilePathInTmp(Path hfilePath) throws IOException {
+    return new Path((hfilePath != null ? hfilePath.toString() : StoreFile.getUniqueFile(fs,
+      region.getTmpDir()).toString())
+        + IndexConstants.REGION_INDEX_DIR_NAME);
+  }
+
+  IndexWriter createIndexWriterInLocalTmp(Compression.Algorithm compression) throws IOException {
+    return StoreFile.createIndexWriter(this.localfs, getIndexFilePathInLocalTmp(),
+      this.indexReplication, this.blocksize, compression, this.indexComparator, this.conf);
+  }
+
+  Path getIndexFilePathInLocalTmp() throws IOException {
+    Path indexCompactionPath = new Path(conf.get(IndexConstants.INDEX_COMPACTION_LOCAL_DIR));
+    if(!this.localfs.exists(indexCompactionPath)){
+      this.localfs.mkdirs(indexCompactionPath);
+    }
+    return new Path(StoreFile.getUniqueFile(localfs, indexCompactionPath)
+        + IndexConstants.REGION_INDEX_DIR_NAME);
+  }
+  
   /*
    * @param maxKeyCount
    * @return Writer for a new StoreFile in the tmp dir.
@@ -1104,7 +1313,7 @@ public class Store extends SchemaConfigured implements HeapSize {
   /*
    * @param o Observer no longer interested in changes in set of Readers.
    */
-  void deleteChangedReaderObserver(ChangedReadersObserver o) {
+  public void deleteChangedReaderObserver(ChangedReadersObserver o) {
     // We don't check if observer present; it may not be (legitimately)
     this.changedReaderObservers.remove(o);
   }
@@ -1157,6 +1366,12 @@ public class Store extends SchemaConfigured implements HeapSize {
     StoreFile sf = null;
     try {
       StoreFile.Writer writer = this.compactor.compact(cr, maxId);
+      
+      // compact index files
+      if (hasIndex && writer!=null) {
+        this.compactor.compactIndex(cr, writer.getPath());
+      }
+      
       // Move the compaction into place.
       if (this.conf.getBoolean("hbase.hstore.compaction.complete", true)) {
         sf = completeCompaction(filesToCompact, writer);
@@ -1825,11 +2040,28 @@ public class Store extends SchemaConfigured implements HeapSize {
   StoreFile completeCompaction(final Collection<StoreFile> compactedFiles,
                                        final StoreFile.Writer compactedFile)
       throws IOException {
+    // 0. Moving the new index file into place,
+    if (compactedFile != null) {
+      
+    }
+    
     // 1. Moving the new files into place -- if there is a new file (may not
     // be if all cells were expired or deleted).
     StoreFile result = null;
     if (compactedFile != null) {
       validateStoreFile(compactedFile.getPath());
+      
+      //make sure to move index file first
+      Path indexorigPath = this.getIndexFilePathFromHFilePathInTmp(compactedFile.getPath());
+      Path indexdstPath = new Path(indexDir, compactedFile.getPath().getName());
+      if(fs.exists(indexorigPath)){
+        LOG.info("Renaming compacted index file at " + indexorigPath + " to " + indexdstPath);
+        if (!HBaseFileSystem.renameDirForFileSystem(fs, indexorigPath, indexdstPath)) {
+          LOG.error("Failed move of compacted index file " + indexorigPath + " to " + indexdstPath);
+          throw new IOException("Failed move of compacted index file " + indexorigPath + " to "
+              + indexdstPath);
+        }
+      }
       // Move the file into the right spot
       Path origPath = compactedFile.getPath();
       Path destPath = new Path(homedir, origPath.getName());
@@ -1837,8 +2069,11 @@ public class Store extends SchemaConfigured implements HeapSize {
       if (!HBaseFileSystem.renameDirForFileSystem(fs, origPath, destPath)) {
         LOG.error("Failed move of compacted file " + origPath + " to " +
             destPath);
-        throw new IOException("Failed move of compacted file " + origPath +
-            " to " + destPath);
+        //try to move index file to tmp, failure of this operation will not affect consistency
+        if (fs.exists(indexdstPath)) {
+          HBaseFileSystem.renameDirForFileSystem(fs, indexdstPath, indexorigPath);
+          throw new IOException("Failed move of compacted file " + origPath + " to " + destPath);
+        }
       }
       result = new StoreFile(this.fs, destPath, this.conf, this.cacheConf,
           this.family.getBloomFilterType(), this.dataBlockEncoder);
@@ -1876,6 +2111,7 @@ public class Store extends SchemaConfigured implements HeapSize {
 
       // let the archive util decide if we should archive or delete the files
       LOG.debug("Removing store files after compaction...");
+      //TODO add support for index archive
       HFileArchiver.archiveStoreFiles(this.conf, this.fs, this.region, this.family.getName(),
         compactedFiles);
 
@@ -1898,6 +2134,17 @@ public class Store extends SchemaConfigured implements HeapSize {
       }
       this.storeSize += r.length();
       this.totalUncompressedBytes += r.getTotalUncompressedBytes();
+    }
+    
+    indexStoreSize=0L;
+    if(hasIndex){
+      for (StoreFile isf : this.storefiles) {
+          IndexReader r = isf.getIndexReader();
+          if (r == null) {
+            continue;
+          }
+          indexStoreSize += r.length();
+       }
     }
     return result;
   }
@@ -2216,6 +2463,18 @@ public class Store extends SchemaConfigured implements HeapSize {
         scanner = new StoreScanner(this, getScanInfo(), scan, targetCols);
       }
       return scanner;
+    } finally {
+      lock.readLock().unlock();
+    }
+  }
+  
+  public StoreIndexScanner getStoreIndexScanner(Range r, Scan s, Set<ByteArray> joinSet, boolean isAND) throws IOException {
+    lock.readLock().lock();
+    try {
+      StoreIndexScanner sis =
+          new StoreIndexScanner(this, this.memstore.getScanners(), this.comparator, this.indexComparator, r, s, joinSet, isAND);
+      this.addChangedReaderObserver(sis);
+      return sis;
     } finally {
       lock.readLock().unlock();
     }

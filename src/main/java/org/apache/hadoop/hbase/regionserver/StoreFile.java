@@ -48,6 +48,9 @@ import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValue.KVComparator;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.fs.HFileSystem;
+import org.apache.hadoop.hbase.index.client.IndexConstants;
+import org.apache.hadoop.hbase.index.regionserver.HalfIndexReader;
+import org.apache.hadoop.hbase.index.regionserver.IndexReader;
 import org.apache.hadoop.hbase.io.HFileLink;
 import org.apache.hadoop.hbase.io.HalfStoreFileReader;
 import org.apache.hadoop.hbase.io.Reference;
@@ -61,6 +64,10 @@ import org.apache.hadoop.hbase.io.hfile.HFileScanner;
 import org.apache.hadoop.hbase.io.hfile.HFileWriterV1;
 import org.apache.hadoop.hbase.io.hfile.HFileWriterV2;
 import org.apache.hadoop.hbase.io.hfile.NoOpDataBlockEncoder;
+import org.apache.hadoop.hbase.index.regionserver.IndexFile;
+import org.apache.hadoop.hbase.index.regionserver.IndexKeyValue;
+import org.apache.hadoop.hbase.index.regionserver.IndexKeyValue.IndexKVComparator;
+import org.apache.hadoop.hbase.index.regionserver.IndexWriter;
 import org.apache.hadoop.hbase.regionserver.metrics.SchemaMetrics;
 import org.apache.hadoop.hbase.regionserver.metrics.SchemaConfigured;
 import org.apache.hadoop.hbase.util.BloomFilter;
@@ -222,6 +229,15 @@ public class StoreFile extends SchemaConfigured {
     Pattern.compile(String.format("^(%s|%s)\\.(.+)$",
       HFILE_NAME_REGEX, HFileLink.LINK_NAME_REGEX));
 
+  private Path indexPath;
+  
+  private Path indexReferencePath;
+  
+  private boolean hasIndex=false;
+  
+  // IndexFile.Reader
+  private volatile IndexReader indexReader;
+  
   // StoreFile.Reader
   private volatile Reader reader;
 
@@ -260,11 +276,19 @@ public class StoreFile extends SchemaConfigured {
       throws IOException {
     this.fs = fs;
     this.path = p;
+    
+    Path tmpPath=getIndexPathFromPath(path);
+    if(fs.exists(tmpPath)){
+      this.indexPath=tmpPath;
+      this.hasIndex=true;
+    }
+    
     this.cacheConf = cacheConf;
     this.dataBlockEncoder =
         dataBlockEncoder == null ? NoOpDataBlockEncoder.INSTANCE
             : dataBlockEncoder;
 
+    //TODO add link index file support
     if (HFileLink.isHFileLink(p)) {
       this.link = new HFileLink(conf, p);
       LOG.debug("Store file " + p + " is a link");
@@ -273,6 +297,12 @@ public class StoreFile extends SchemaConfigured {
       this.referencePath = getReferredToFile(this.path);
       if (HFileLink.isHFileLink(this.referencePath)) {
         this.link = new HFileLink(conf, this.referencePath);
+      }
+      //index
+      tmpPath=getIndexPathFromPath(referencePath);
+      if(fs.exists(tmpPath)){
+        this.indexReferencePath=tmpPath;
+        this.hasIndex=true;
       }
       LOG.debug("Store file " + p + " is a " + reference.getFileRegion() +
         " reference to " + this.referencePath);
@@ -297,6 +327,14 @@ public class StoreFile extends SchemaConfigured {
     }
 
     SchemaMetrics.configureGlobally(conf);
+  }
+
+  Path getIndexPath() {
+    return this.indexPath;
+  }
+  
+  Path getIndexPathFromPath(Path hfilePath){
+    return new Path(new Path(hfilePath.getParent(),IndexConstants.REGION_INDEX_DIR_NAME), hfilePath.getName());
   }
 
   /**
@@ -354,6 +392,7 @@ public class StoreFile extends SchemaConfigured {
    * @return True if the path has format of a HStoreFile reference.
    */
   public static boolean isReference(final String name) {
+    if(name.equals(IndexConstants.REGION_INDEX_DIR_NAME)) return false;
     Matcher m = REF_NAME_PATTERN.matcher(name);
     return m.matches() && m.groupCount() > 1;
   }
@@ -673,6 +712,9 @@ public class StoreFile extends SchemaConfigured {
       }
 
     }
+    
+    this.createIndexReader();
+    
     return this.reader;
   }
 
@@ -694,6 +736,8 @@ public class StoreFile extends SchemaConfigured {
       this.reader.close(evictOnClose);
       this.reader = null;
     }
+    
+    this.closeIndexReader();
   }
 
   /**
@@ -703,6 +747,73 @@ public class StoreFile extends SchemaConfigured {
   public void deleteReader() throws IOException {
     closeReader(true);
     HBaseFileSystem.deleteDirFromFileSystem(fs, getPath());
+    
+    if(hasIndex && getIndexPath()!=null){
+      //when it's a reference file, index path can be null
+      HBaseFileSystem.deleteDirFromFileSystem(fs, getIndexPath());
+    }
+  }
+  
+  /**
+   * @return Current index reader.  Must call createIndexReader first else returns null.
+   * @throws IOException
+   * @see #createIndexReader()
+   */
+  public IndexReader getIndexReader() {
+    return this.indexReader;
+  }
+  
+  /**
+   * @return IndexReader for StoreFile. creates if necessary
+   * @throws IOException
+   */
+  public IndexReader createIndexReader() throws IOException {
+    if (hasIndex && this.indexReader == null) {
+      try {
+        this.indexReader = openIndex();
+      } catch (IOException e) {
+        try {
+          this.closeIndexReader();
+        } catch (IOException ee) {
+        }
+        throw e;
+      }
+    }
+    return this.indexReader;
+  }
+
+  /**
+   * Opens index reader on this store file. Called by Constructor.
+   * @return IndexReader for the store file.
+   * @throws IOException
+   * @see #closeIndexReader()
+   */
+  private IndexReader openIndex() throws IOException {
+    if (this.indexReader != null) {
+      throw new IllegalAccessError("Index reader already open");
+    }
+
+    if (isReference()) {
+      this.indexReader =
+          new HalfIndexReader(this.fs, this.indexReferencePath, null, this.reference);
+    } else {
+      this.indexReader = new IndexReader(this.fs, this.indexPath, null, false );
+    }
+    this.indexReader.loadFileInfo();
+    this.indexReader.setSequenceID(this.sequenceid);
+
+    //TODO add compute index file block distribution support
+    return this.indexReader;
+  }
+  
+  /**
+   * @throws IOException
+   */
+  public synchronized void closeIndexReader() throws IOException {
+    if (this.indexReader != null) {
+      this.indexReader.close();
+      this.indexReader = null;
+    }
   }
 
   @Override
@@ -1014,6 +1125,34 @@ public class StoreFile extends SchemaConfigured {
     return r.write(fs, p);
   }
 
+  /**
+   * Create a store file index writer. Client is responsible for closing file when done.
+   * @param fs
+   * @param indexPath
+   * @param blocksize
+   * @param algorithm Pass null to get default.
+   * @param c Pass null to get default.
+   * @param conf HBase system configuration. used with bloom filters
+   * @return IndexWriter
+   * @throws IOException
+   */
+  public static IndexWriter createIndexWriter(final FileSystem fs, final Path indexPath, final short replication,
+      final int blocksize, final Compression.Algorithm algorithm, final IndexKVComparator c,
+      final Configuration conf) throws IOException {
+    return new IndexWriter(fs, indexPath, replication, blocksize,
+        algorithm == null ? IndexFile.DEFAULT_COMPRESSION_ALGORITHM : algorithm, conf,
+        c == null ? IndexKeyValue.COMPARATOR : c);
+  }
+
+  public static IndexReader createIndexReader(final FileSystem fs, final Path filePath,
+      final Configuration conf) throws IOException {
+    if (!fs.exists(filePath)) {
+      return null;
+    }
+    IndexReader reader = new IndexReader(fs, filePath, null, false);
+    reader.loadFileInfo();
+    return reader;
+  }
 
   /**
    * A StoreFile writer.  Use this to read/write HBase Store Files. It is package

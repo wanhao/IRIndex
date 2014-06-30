@@ -23,15 +23,23 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.HBaseFileSystem;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.index.regionserver.IndexKeyValue;
+import org.apache.hadoop.hbase.index.regionserver.IndexKeyValueHeap;
+import org.apache.hadoop.hbase.index.regionserver.IndexReader;
+import org.apache.hadoop.hbase.index.regionserver.IndexWriter;
+import org.apache.hadoop.hbase.index.regionserver.StoreFileIndexScanner;
 import org.apache.hadoop.hbase.io.hfile.Compression;
 import org.apache.hadoop.hbase.io.hfile.HFileWriterV2;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionProgress;
@@ -232,6 +240,185 @@ class Compactor extends Configured {
       }
     }
     return writer;
+  }
+  
+  /**
+   * Do a minor/major compaction for store files' index.
+   * @param filesToCompact which files to compact
+   * @param hfilePath if null, compact index from this file, else compact each StoreFile's index
+   *          together
+   * @return Product of compaction or null if there is no index column cell
+   * @throws IOException
+   */
+  Path compactIndex(final CompactionRequest request, final Path hfilePath) throws IOException {
+    List<StoreFile> filesToCompact = request.getFiles();
+    boolean majorCompact = request.isMajor();
+    Store store = request.getStore();
+    Compression.Algorithm compactionCompression =
+        (store.getFamily().getCompactionCompression() != Compression.Algorithm.NONE) ? store
+            .getFamily().getCompactionCompression() : store.getFamily().getCompression();
+    IndexWriter writer = null;
+    List<IndexReader> indexFilesToCompact = new ArrayList<IndexReader>();
+
+    if (majorCompact) {
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Generate intermediate index file from major compaction file=" + hfilePath
+            + " in cf=" + request.getStore().toString());
+      }
+
+      StoreFile compactedStoreFile =
+          new StoreFile(store.fs, hfilePath, store.conf, store.cacheConf, store.getFamily()
+              .getBloomFilterType(), store.getDataBlockEncoder());
+      store.passSchemaMetricsTo(compactedStoreFile);
+      store.passSchemaMetricsTo(compactedStoreFile.createReader());
+      
+      StoreFileScanner compactedFileScanner =
+          compactedStoreFile.getReader().getStoreFileScanner(false, false);
+      List<Path> flushedIndexFiles = new ArrayList<Path>();
+
+      TreeSet<IndexKeyValue> indexCache = new TreeSet<IndexKeyValue>(store.indexComparator);
+      long cacheSize = 0;
+
+      int bytesRead = 0;
+      KeyValue kv = null;
+      IndexKeyValue ikv = null;
+
+      try {
+        compactedFileScanner.seek(KeyValue.createFirstOnRow(HConstants.EMPTY_BYTE_ARRAY));
+        while ((kv = compactedFileScanner.next()) != null || !indexCache.isEmpty()) {
+          if (kv != null && store.indexMap.containsKey(kv.getQualifier())) {
+            ikv = new IndexKeyValue(kv);
+            indexCache.add(ikv);
+            cacheSize += ikv.heapSize();
+          }
+
+          // flush cache to file
+          if (cacheSize >= store.indexCompactCacheMaxSize || kv == null) {
+            try {
+              writer = store.createIndexWriterInLocalTmp(compactionCompression);
+
+              if (LOG.isDebugEnabled()) {
+                LOG.debug("Flush intermediate index cache to file=" + writer.getPath()
+                    + ", cacheSize=" + StringUtils.humanReadableInt(cacheSize) + ", entries="
+                    + indexCache.size() + ", in cf=" + store.toString());
+              }
+
+              for (IndexKeyValue tmp : indexCache) {
+                writer.append(tmp);
+              }
+            } finally {
+              if (writer != null) {
+                writer.close();
+                flushedIndexFiles.add(writer.getPath());
+              }
+              writer = null;
+              indexCache.clear();
+              cacheSize = 0L;
+            }
+          }
+
+          // check periodically to see if a system stop is
+          // requested
+          if (Store.closeCheckInterval > 0 && kv != null) {
+            bytesRead += kv.getLength();
+            if (bytesRead > Store.closeCheckInterval) {
+              bytesRead = 0;
+              if (!store.getHRegion().areWritesEnabled()) {
+                for (Path indexPath : flushedIndexFiles) {
+                  store.localfs.delete(indexPath, false);
+                }
+                indexCache.clear();
+                throw new InterruptedIOException("Aborting compaction index of store " + this
+                    + " in region " + store.getHRegion() + " because user requested stop.");
+              }
+            }
+          }
+        }
+      } finally {
+        if (compactedFileScanner != null) compactedFileScanner.close();
+      }
+      
+      if (flushedIndexFiles.isEmpty()) {
+        return null;
+      } else if (flushedIndexFiles.size() == 1) {
+        Path desPath = store.getIndexFilePathFromHFilePathInTmp(hfilePath);
+        store.fs.copyFromLocalFile(true, flushedIndexFiles.get(0), desPath);
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Completed index compaction of 1 file, new file=" + flushedIndexFiles.get(0)
+              + " in cf=" + store.toString());
+        }
+
+        return desPath;
+      } else {
+        for (Path indexFile : flushedIndexFiles) {
+          indexFilesToCompact.add(StoreFile.createIndexReader(store.localfs, indexFile, store.conf));
+        }
+      }
+
+    } else {
+      for (StoreFile tmpfile : filesToCompact) {
+        if (tmpfile.getIndexReader() != null) {
+          indexFilesToCompact.add(tmpfile.getIndexReader());
+        }
+      }
+    }
+
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Compact index from " + indexFilesToCompact.size() + " file(s) in cf="
+          + store.toString());
+    }
+
+    if (!indexFilesToCompact.isEmpty()) {
+      List<StoreFileIndexScanner> indexFileScanners =
+          StoreFileIndexScanner.getScannersForIndexReaders(indexFilesToCompact, false, false);
+      IndexKeyValue startIKV = new IndexKeyValue(null, null, null);
+      for (StoreFileIndexScanner scanner : indexFileScanners) {
+        scanner.seek(startIKV);
+      }
+
+      IndexKeyValueHeap indexFileHeap =
+          new IndexKeyValueHeap(indexFileScanners, store.indexComparator);
+      IndexKeyValue ikv = null;
+      writer = null;
+
+      try {
+        while ((ikv = indexFileHeap.next()) != null) {
+          if (writer == null) {
+            writer = store.createIndexWriterInTmp(compactionCompression);
+          }
+          writer.append(ikv);
+        }
+
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Completed index compaction of " + indexFilesToCompact.size()
+              + " file(s), new file=" + (writer == null ? null : writer.getPath()) + " in cf="
+              + store.toString());
+        }
+
+      } finally {
+        if (writer != null) {
+          writer.close();
+        }
+        if (indexFileScanners != null) {
+          indexFileHeap.close();
+        }
+      }
+    }
+
+    // delete all intermediate index file when do a major compaction
+    if (majorCompact && indexFilesToCompact != null) {
+      for (IndexReader isf : indexFilesToCompact) {
+        HBaseFileSystem.deleteFileFromFileSystem(store.localfs, isf.getPath());
+      }
+    }
+
+    if (writer != null) {
+      HBaseFileSystem.renameDirForFileSystem(store.fs, writer.getPath(),
+        store.getIndexFilePathFromHFilePathInTmp(hfilePath));
+      return store.getIndexFilePathFromHFilePathInTmp(hfilePath);
+    }
+
+    return null;
   }
 
   void isInterrupted(final Store store, final StoreFile.Writer writer)
