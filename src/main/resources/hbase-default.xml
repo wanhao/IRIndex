@@ -63,6 +63,13 @@
     as a local storage.
     </description>
   </property>
+    <property>
+    <name>index.compaction.local.dir</name>
+    <value>${hbase.tmp.dir}/index-compaction/</value>
+    <description>Directory on the local filesystem to be used by major
+    compaction to store intermediate IndexFiles..
+    </description>
+  </property>
   <property>
     <name>hbase.master.info.port</name>
     <value>60010</value>
