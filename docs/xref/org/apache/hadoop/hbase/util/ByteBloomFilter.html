@@ -375,7 +375,7 @@
 <a name="365" href="#365">365</a>   <strong class="jxr_keyword">public</strong> <strong class="jxr_keyword">void</strong> add(byte [] buf, <strong class="jxr_keyword">int</strong> offset, <strong class="jxr_keyword">int</strong> len) {
 <a name="366" href="#366">366</a>     <em class="jxr_comment">/*</em>
 <a name="367" href="#367">367</a> <em class="jxr_comment">     * For faster hashing, use combinatorial generation</em>
-<a name="368" href="#368">368</a> <em class="jxr_comment">     * <a href="http://www.eecs.harvard.edu/~kirsch/pubs/bbbf/esa06.pdf" target="alexandria_uri">http://www.eecs.harvard.edu/~kirsch/pubs/bbbf/esa06.pdf</a></em>
+<a name="368" href="#368">368</a> <em class="jxr_comment">     * <a href="https://www.eecs.harvard.edu/~michaelm/postscripts/tr-02-05.pdf" target="alexandria_uri">http://www.eecs.harvard.edu/~kirsch/pubs/bbbf/esa06.pdf</a></em>
 <a name="369" href="#369">369</a> <em class="jxr_comment">     */</em>
 <a name="370" href="#370">370</a>     <strong class="jxr_keyword">int</strong> hash1 = <strong class="jxr_keyword">this</strong>.hash.hash(buf, offset, len, 0);
 <a name="371" href="#371">371</a>     <strong class="jxr_keyword">int</strong> hash2 = <strong class="jxr_keyword">this</strong>.hash.hash(buf, offset, len, hash1);
